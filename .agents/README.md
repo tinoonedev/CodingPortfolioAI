@@ -26,6 +26,11 @@ Skills use the Agent Skills convention: one folder per skill with a `SKILL.md` f
 - `skills/ci-smoke-sanity/SKILL.md`
 - `skills/mcp-integrations/SKILL.md`
 
+## Templates
+
+- `templates/feature-requirements.feature` — Gherkin acceptance criteria for one feature.
+- `templates/development-log-subtask.md` — Jira development-log subtask fields and milestone comment format.
+
 ## Handoff contract
 
-Each task handoff should identify the Jira issue and task revision when available, owner, inputs, Gherkin scenarios, expected artifacts, acceptance checks, and dependencies. Route questions and failed checks to the responsible role. External writes and production releases require explicit authorization for the selected target. Production behavior must use real integrations; no demo stub or fake success may stand in for one.
+Each task handoff should identify the Jira issue and task revision when available, owner, inputs, Gherkin scenarios, expected artifacts, acceptance checks, and dependencies. Record meaningful work and evidence in the Jira development-log subtask. The per-task Jira comment gate is temporarily suspended under SCRUM-15; Jira comments and statuses are tracking evidence, not task authorization. Route questions and failed checks to the responsible role. External writes and production releases require explicit authorization for the selected target. Production behavior must use real integrations; no demo stub or fake success may stand in for one.

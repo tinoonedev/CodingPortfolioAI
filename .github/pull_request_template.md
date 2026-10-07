@@ -8,6 +8,7 @@
 - Development-log subtask:
 - Task revision:
 - [ ] The development-log subtask is linked to the parent and has current progress, decision, and verification evidence
+- [ ] The complete staged and unstaged diff was reviewed before commit/push; review findings and fixes are recorded in Jira
 - [ ] Required feature tests and acceptance checks passed and were recorded before the parent Jira issue moved to Ready for Release
 - [ ] Parent Jira issue is Ready for Release
 - [ ] This PR targets `development`

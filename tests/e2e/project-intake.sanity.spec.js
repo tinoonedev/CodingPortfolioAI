@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 test('creates a clearly labeled local intake and restores it after reload @sanity', async ({ page }) => {
   const projectName = `Northstar ${Date.now()}`;
 
-  await page.goto('/');
+  await page.goto('/demo');
   await page.getByRole('button', { name: 'Create client project' }).click();
   await page.getByLabel('Project name').fill(projectName);
   await page.getByLabel('Client name').fill('Northstar Labs');

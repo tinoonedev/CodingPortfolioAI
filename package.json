@@ -3,10 +3,17 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/dev.mjs",
+    "server:dev": "node --env-file-if-exists=.env --watch server/index.js",
+    "start": "node --env-file-if-exists=.env scripts/start.mjs",
+    "db:migrate": "node --env-file-if-exists=.env server/migrate.js",
+    "auth:invite": "node --env-file-if-exists=.env scripts/invite-account.mjs",
     "build": "vite build",
-    "preview": "vite preview",
+    "preview": "npm run start",
     "test": "node --test tests/*.test.js",
     "test:e2e": "playwright test",
     "test:smoke": "playwright test --grep @smoke",
@@ -15,6 +22,8 @@
     "check": "npm run check:branch && npm test && npm run build"
   },
   "dependencies": {
+    "express": "^5.2.1",
+    "pg": "^8.23.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

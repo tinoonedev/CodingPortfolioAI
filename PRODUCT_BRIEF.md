@@ -19,7 +19,7 @@ The UI should feel lively and game-like through presence, progress, milestones, 
 4. **QA analyst** challenges acceptance criteria early, drafts a test plan, and proposes unit, integration, end-to-end, smoke, sanity, and regression coverage. Unclear requirements return to the analyst/product owner with specific questions.
 5. **Frontend and backend developers** implement separately scoped work against the accepted design and Jira criteria. They can request clarification or send a failed/blocked item back to its responsible owner.
 6. **QA** runs the agreed checks after implementation, records evidence, and routes failures to the relevant developer with reproducible steps. A bounded fix-and-retest loop follows.
-7. **Delivery engineer** reviews the assembled change, opens or updates the pull request, monitors CI/CD, and attaches preview and deployment evidence. Production release is an explicit approval by default.
+7. **Delivery engineer** reviews the assembled change, records passing feature checks, moves the Jira issue to **Ready for Release**, and then opens or updates a focused pull request against `development`. PR check or review failures route the issue back to **In Progress** for correction and retesting. After GitHub confirms the merge, the merge SHA and final evidence are recorded and the Jira issue moves to **Done**. Production release remains a separate, explicit approval by default.
 
 Every handoff has an owner, Jira issue, inputs, output artifact, status, and acceptance check. A failed check or missing decision reopens the right work item rather than advancing the workflow. The PM agent coordinates dependencies; it does not silently overrule the specialist responsible for the work.
 
@@ -142,12 +142,42 @@ Workers write structured artifacts and events to the application backend. The ba
 
 “Fully automated” should mean the system can finish the configured workflow without a person micromanaging each agent step. It should not mean agents receive unlimited credentials or can spend money or alter production without policy.
 
-- Automatic: draft artifacts, code in isolated branches, run tests, fix bounded failures, create preview environments, and update Jira issues.
+- Automatic: draft artifacts, code in isolated branches, run tests, fix bounded failures, create preview environments, and update Jira issues within the selected project permissions.
 - Confirm first: connect external accounts, create paid resources, change the accepted scope, delete data, or publish a production release by default.
 - Always visible: show the exact action, target, permissions, cost limit, result, and rollback path for consequential tool calls.
 - Fail closed: if credentials, policy, quality gates, or deployment checks fail, stop the workflow and surface a useful next action.
 
 This still demonstrates an agentic delivery team while making the automation credible to prospective clients.
+
+## Product decisions and readiness
+
+### Confirmed decisions
+
+- Fieldwork is a web-first React studio control room, with mobile and API clients represented as separate demo project briefs.
+- Local development uses PostgreSQL in Docker and email/password accounts. This is a local development setup, not a production hosting decision.
+- Jira `SCRUM` is selected for Fieldwork repository work tracking. It is not a client project, and demo briefs must not create issues there as if they belonged to real clients.
+- The mandatory Jira comment gate for each repository task is temporarily suspended by SCRUM-15. Jira comments and statuses provide traceability and are not treated as task authorization.
+- Production connectors are only considered available when the app has a real, scoped connection and returned evidence. The current browser app does not have Jira, Figma, GitHub, model-provider, or deployment integrations wired in.
+- Delivery status follows **tests pass → Ready for Release → PR to `development` → Done after confirmed merge**. A failed PR check or review returns work to In Progress for remediation and retest.
+
+### Assumptions to validate
+
+- The first sellable workflow will target small web projects before broad mobile, API, and infrastructure generation.
+- A client workspace will eventually need explicit membership, role, and project-level connector scopes; exact enterprise tenancy and retention requirements are not yet validated.
+- A server-side provider adapter can support the selected OpenAI models and tool permissions without exposing credentials to generated code or browser storage.
+
+### Open product decisions
+
+- Which deployment provider and preview isolation model will be used for client projects?
+- Which model, data retention, and per-project spend controls should be configurable by clients?
+- What client workflow controls will be configurable, including optional pause points, reviewer roles, and release authorization?
+- What service-level objectives, audit retention period, and incident response expectations will apply to a hosted production service?
+
+### Implementation status at this brief revision
+
+- The repository has a React/Vite interface, an authenticated local workspace backed by PostgreSQL, and a seeded Waypoint demo that is explicitly not a connected run.
+- Jira, Figma, GitHub, OpenAI provider execution, Playwright MCP orchestration, CI/CD control, and deployment are not wired into the browser product. Connector work must remain visibly blocked or not configured until implemented and verified against real services.
+- The recommended stack and architecture below describe a target direction. They are not evidence that those services have been implemented or deployed.
 
 ## Portfolio evidence to produce
 
@@ -156,3 +186,11 @@ This still demonstrates an agentic delivery team while making the automation cre
 3. A working vertical slice that generates one tiny app, runs QA, and deploys a preview.
 4. A 2–3 minute product walkthrough showing real agent handoffs, Jira issues, QA evidence, and preview deployment.
 5. A case study with run success rate, time to preview, cost per run, human interventions, and failure examples.
+
+## Demo client briefs
+
+These fictional examples demonstrate how the studio brief becomes bounded, testable client scope. They are planning artifacts only; they are not live integrations, seeded production runs, or permission to create external client work.
+
+- [PocketPantry mobile grocery list](docs/demo-projects/mobile-app.md)
+- [Northstar Studio booking web app](docs/demo-projects/web-app.md)
+- [ParcelPath shipment status API](docs/demo-projects/api.md)

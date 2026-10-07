@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-test('creates a local client intake and restores it after reload', async ({ page }) => {
+test('creates a clearly labeled local intake and restores it after reload @sanity', async ({ page }) => {
   const projectName = `Northstar ${Date.now()}`;
 
   await page.goto('/');

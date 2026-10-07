@@ -8,6 +8,9 @@ This directory contains repository-local agent role briefs and reusable skill gu
 - `agents/project-manager.md` — Jira work breakdown, dependencies, handoffs.
 - `agents/product-designer.md` — user flows, wireframes, Figma handoff.
 - `agents/qa-analyst.md` — test strategy, risk, coverage and evidence.
+- `agents/security-engineer.md` — threat modeling, application and agent security.
+- `agents/integration-engineer.md` — real provider adapters and scoped credentials.
+- `agents/test-automation-engineer.md` — CI test suites and real integration evidence.
 - `agents/frontend-developer.md` — React UI delivery.
 - `agents/backend-developer.md` — API, persistence and integration delivery.
 - `agents/delivery-engineer.md` — review, CI, preview and release evidence.
@@ -18,8 +21,11 @@ Skills use the Agent Skills convention: one folder per skill with a `SKILL.md` f
 
 - `skills/feature-delivery/SKILL.md`
 - `skills/qa-test-planning/SKILL.md`
+- `skills/gherkin-business-requirements/SKILL.md`
+- `skills/secure-integrations/SKILL.md`
+- `skills/ci-smoke-sanity/SKILL.md`
 - `skills/mcp-integrations/SKILL.md`
 
 ## Handoff contract
 
-Each task handoff should identify the Jira issue and task revision when available, owner, inputs, expected artifacts, acceptance checks, and dependencies. Route questions and failed checks to the responsible role. External writes and production releases require explicit authorization for the selected target.
+Each task handoff should identify the Jira issue and task revision when available, owner, inputs, Gherkin scenarios, expected artifacts, acceptance checks, and dependencies. Route questions and failed checks to the responsible role. External writes and production releases require explicit authorization for the selected target. Production behavior must use real integrations; no demo stub or fake success may stand in for one.

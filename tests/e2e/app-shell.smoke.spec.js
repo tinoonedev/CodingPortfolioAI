@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 test('loads the seeded project room and identifies demo-only workflow data @smoke', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/demo');
 
   await expect(page).toHaveTitle('Fieldwork — Agentic Product Studio');
   await expect(page.getByRole('heading', { level: 1 })).toContainText('Waypoint');

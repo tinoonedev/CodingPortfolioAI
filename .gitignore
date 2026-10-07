@@ -3,6 +3,7 @@ dist/
 .DS_Store
 .env*
 !.env.example
+.local-invites/
 playwright-report/
 test-results/
 blob-report/

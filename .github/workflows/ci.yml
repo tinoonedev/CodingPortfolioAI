@@ -9,6 +9,28 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    env:
+      WORKSPACE_REAL_INTEGRATION: '1'
+      DATABASE_URL: postgresql://fieldwork:fieldwork@127.0.0.1:5433/fieldwork
+      DATABASE_SSL: 'false'
+      STUDIO_WORKSPACE_ID: 10000000-0000-4000-8000-000000000001
+      STUDIO_WORKSPACE_NAME: Fieldwork CI
+      APP_ORIGIN: http://127.0.0.1:4173
+      API_PORT: '3001'
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: fieldwork
+          POSTGRES_PASSWORD: fieldwork
+          POSTGRES_DB: fieldwork
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U fieldwork -d fieldwork"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v7
@@ -16,6 +38,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run db:migrate
       - run: npm run check:branch
         env:
           GITHUB_HEAD_REF: ${{ github.head_ref }}

@@ -12,8 +12,8 @@
 - [ ] `npm run check` or CI checks pass
 - [ ] `npm run test:smoke` passes
 - [ ] `npm run test:sanity` passes
-- [ ] Dependency audit and static security analysis pass
-- [ ] Secret scan passes
+- [ ] `npm audit --audit-level=high` passes
+- [ ] GitHub secret scanning reports no findings
 - [ ] UI behavior reviewed at desktop and mobile sizes (when applicable)
 - [ ] Real integrations are exercised; no mock, stub, route interception, or fake success is used as evidence
 

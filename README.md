@@ -17,7 +17,7 @@ npm run dev
 - Requirements and acceptance criteria use the Gherkin template in `.agents/templates/feature-requirements.feature`.
 - `npm run check` validates the `feature/<project>_<change>` branch name, runs the domain unit suite, and creates a production build.
 - Install a local browser once with `npx playwright install chromium`, then run `npm run test:smoke` and `npm run test:sanity` for real browser coverage of the current features.
-- GitHub Actions runs unit tests, npm audit, dependency review, CodeQL, Gitleaks secret scanning, production build, and separate Playwright smoke/sanity suites on every feature pull request. Dependabot checks npm and GitHub Action updates weekly.
+- GitHub Actions runs branch validation, unit tests, npm audit, a production build, and separate Playwright smoke/sanity suites on every feature pull request. Dependabot checks npm and GitHub Action updates weekly.
 - Do not add mocked connectors or fake success paths. The current Waypoint room is seeded legacy demo data, clearly labeled as demo; it is not a production integration. New work must use real services or remain blocked/not configured until the connection is available.
 
 For repository conventions and agent handoffs, start with [`.agents/README.md`](.agents/README.md) and [SECURITY.md](SECURITY.md).

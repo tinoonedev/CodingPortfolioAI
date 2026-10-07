@@ -6,3 +6,27 @@
 .integration-status{width:100%;color:inherit;text-align:left;cursor:pointer}.integration-status:hover b{color:var(--lime)}.connection-dialog-icon{color:#b7dc8c!important;border-color:#6d884d!important}.site-link{display:flex;justify-content:space-between;align-items:center;padding:11px 12px;border:1px solid #394234;border-radius:4px;background:#131710;color:#d9e5ce;text-decoration:none;font:9px var(--mono)}.site-link span{color:var(--lime)}.site-project{display:flex;align-items:center;gap:10px;margin-top:9px;padding:10px 11px;border:1px solid #333b30;border-radius:4px;background:#20251e}.site-project b,.site-project small{display:block}.site-project b{font-size:9px}.site-project small{font-size:8px;color:#929c8d;margin-top:3px}.site-available{margin-left:auto;color:#c6d6ae;font:6px var(--mono);letter-spacing:.08em}.connection-next{display:flex;flex-direction:column;gap:5px;padding-top:13px;margin-top:13px;border-top:1px solid #30372d;color:#dce4d1;font-size:9px}.connection-next span{color:#9da797;font-size:8px;line-height:1.6}
 .figma-connection-icon{width:22px;height:22px;display:grid;place-items:center;background:#382b3c;border-radius:50%;color:#db9de7;font-size:11px}.site-pending{margin-left:auto;color:#ddb774;font:6px var(--mono);letter-spacing:.08em}
 @media(max-width:650px){.pipeline{display:flex;gap:0}.pipeline .stage-card{flex-basis:154px;min-height:176px}.pipeline .handoff{flex-basis:20px}.workflow-legend{align-self:flex-start}}
+
+.intake-pill{color:#d9c58c!important;border-color:#645633!important;background:#29251a!important}
+.intake-meta .meta-group{color:#aab29f;font:9px var(--mono)}
+.intake-panel{padding:20px}
+.intake-overview{display:flex;align-items:center;gap:12px;padding:18px 0;border-bottom:1px solid #343b31}
+.intake-mark{width:38px;height:38px;display:grid;place-items:center;border:1px solid #526044;border-radius:8px;background:#293022;color:var(--lime);font:16px var(--mono)}
+.intake-overview h3{margin:0;color:#edf1e8;font-size:14px}.intake-overview p{margin:4px 0 0;color:#9da696;font-size:10px}
+.intake-status{margin-left:auto;padding:6px 8px;border:1px solid #50452d;border-radius:3px;color:#d8bb7a;font:7px var(--mono);letter-spacing:.08em}
+.intake-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:16px 0}
+.intake-grid article{min-height:100px;padding:13px;border:1px solid #353c32;border-radius:4px;background:#20251e}
+.intake-grid small{color:#9da894;font:7px var(--mono);letter-spacing:.1em}.intake-grid p{margin:10px 0 0;color:#e0e6da;font-size:10px;line-height:1.65;white-space:pre-wrap}
+.intake-next{display:flex;align-items:center;gap:12px;padding:14px;border:1px solid #424c38;border-radius:4px;background:#252b21}
+.intake-next-icon{width:26px;height:26px;display:grid;place-items:center;border-radius:50%;background:#333e2a;color:var(--lime)}
+.intake-next b{color:#e5ebdf;font-size:10px}.intake-next p{margin:5px 0 0;color:#a4ad9d;font-size:9px;line-height:1.5}.intake-next .button{margin-left:auto;flex:none}
+.project-dialog{width:min(590px,calc(100vw - 32px));max-width:590px}
+.project-dialog .dialog-description{margin-bottom:16px}
+.intake-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.intake-form-grid label{display:flex;flex-direction:column;gap:6px;color:#cfd7c7;font-size:9px}
+.intake-form-grid input,.intake-form-grid textarea{width:100%;box-sizing:border-box;padding:10px;border:1px solid #3a4336;border-radius:4px;outline:none;background:#171b15;color:#edf1e8;font:10px var(--sans);resize:vertical}
+.intake-form-grid input:focus,.intake-form-grid textarea:focus{border-color:#9bbd6c;box-shadow:0 0 0 2px #9bbd6c22}
+.intake-form-grid input::placeholder,.intake-form-grid textarea::placeholder{color:#788072}.form-wide{grid-column:1/-1}
+.project-dialog-icon{background:#303a27;color:var(--lime)}
+.button:disabled{opacity:.45;cursor:not-allowed;filter:saturate(.4)}
+@media(max-width:650px){.intake-grid{grid-template-columns:1fr}.intake-grid article{min-height:0}.intake-next{align-items:flex-start;flex-wrap:wrap}.intake-next .button{margin-left:38px}.intake-form-grid{grid-template-columns:1fr}.form-wide{grid-column:auto}.intake-status{font-size:6px}.intake-panel{padding:14px}}

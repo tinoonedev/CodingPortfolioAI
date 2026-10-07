@@ -1,4 +1,4 @@
-import { Fragment, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 
 const stages = [
   { number: '01', icon: '⌕', title: 'Discover', detail: 'Problem, users & success criteria', state: 'complete', status: '✓ COMPLETE', owner: 'AL', name: 'Alex', role: 'Business analyst', footer: 'Brief · WAY-21', note: '2 artifacts' },
@@ -39,20 +39,40 @@ const tabs = [
   { id: 'activity', label: 'Activity' },
 ];
 
+const PROJECT_STORAGE_KEY = 'fieldwork.client-projects.v1';
+const SELECTED_PROJECT_KEY = 'fieldwork.selected-project.v1';
+const sampleProjects = [
+  { id: 'waypoint', name: 'Waypoint', client: 'Waypoint, Inc.', color: 'lime', demo: true, description: 'A calm, clear home base for independent travel planners.' },
+  { id: 'juniper', name: 'Juniper Market', client: 'Sample client', color: 'orange', placeholder: true },
+  { id: 'atlas', name: 'Atlas Care', client: 'Sample client', color: 'blue', placeholder: true },
+];
+
+function readSavedProjects() {
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(PROJECT_STORAGE_KEY) || '[]');
+    return Array.isArray(stored) ? stored : [];
+  } catch {
+    return [];
+  }
+}
+
+function readSelectedProject() {
+  try {
+    return window.localStorage.getItem(SELECTED_PROJECT_KEY) || 'waypoint';
+  } catch {
+    return 'waypoint';
+  }
+}
+
 function Avatar({ initials, tone, pair }) {
   if (pair) return <span className="mini-avatars"><i className="avatar-fe">FE</i><i className="avatar-be">BE</i></span>;
   return <span className={`agent-avatar ${tone}`}>{initials}</span>;
 }
 
-function Sidebar({ activeView, onNavigate, onConnections }) {
-  const projects = [
-    { name: 'Waypoint', color: 'lime', active: true },
-    { name: 'Juniper Market', color: 'orange' },
-    { name: 'Atlas Care', color: 'blue' },
-  ];
+function Sidebar({ activeView, onNavigate, onConnections, projects, selectedProjectId, onSelectProject, onCreateProject }) {
   const nav = [
     { id: 'overview', icon: '◫', name: 'Overview' },
-    { id: 'project', icon: '▦', name: 'Projects', count: '3' },
+    { id: 'project', icon: '▦', name: 'Projects', count: String(projects.filter((project) => !project.placeholder).length) },
     { id: 'activity', icon: '◷', name: 'Activity' },
     { id: 'agents', icon: '✳', name: 'Agent team' },
   ];
@@ -65,8 +85,8 @@ function Sidebar({ activeView, onNavigate, onConnections }) {
         {nav.map((item) => <button key={item.id} className={`nav-item ${activeView === item.id ? 'active' : ''}`} type="button" onClick={() => onNavigate(item.id)}><span>{item.icon}</span>{item.name}{item.count && <i>{item.count}</i>}</button>)}
       </nav>
       <div className="side-projects">
-        <p className="side-label">YOUR PROJECTS <button type="button" aria-label="Add project">+</button></p>
-        {projects.map((project) => <button key={project.name} className={`project-link ${project.active ? 'selected' : ''}`} type="button" onClick={() => project.active || onNavigate('project')}><span className={`project-dot ${project.color}`} /><span>{project.name}</span>{project.active && <small>ACTIVE</small>}</button>)}
+        <p className="side-label">YOUR PROJECTS <button type="button" aria-label="Create client project" onClick={onCreateProject}>+</button></p>
+        {projects.map((project) => <button key={project.id} className={`project-link ${project.id === selectedProjectId ? 'selected' : ''}`} type="button" onClick={() => onSelectProject(project)}><span className={`project-dot ${project.color || 'lime'}`} /><span>{project.name}</span>{project.id === selectedProjectId && <small>ACTIVE</small>}</button>)}
       </div>
       <div className="sidebar-bottom">
         <button className="integration-status" id="connections-button" type="button" onClick={onConnections}><span className="connection-icon">↗</span><span><b>Jira site</b><small>Detected · browser link pending</small></span><span className="connection-dot" /></button>
@@ -115,11 +135,57 @@ function ActivityPanel() {
   </div></section>;
 }
 
+function IntakePanel({ project, onEdit }) {
+  return <section className="panel intake-panel">
+    <div className="subpanel-heading"><div><h2>Client intake</h2><p>Your starter brief is saved in this browser and ready for discovery.</p></div><span className="demo-note">LOCAL DRAFT</span></div>
+    <div className="intake-overview"><div className="intake-mark">{project.name.slice(0, 1).toUpperCase()}</div><div><h3>{project.name}</h3><p>{project.client}</p></div><span className="intake-status">SCOPE NOT REVIEWED</span></div>
+    <div className="intake-grid">
+      <article><small>BUSINESS PROBLEM</small><p>{project.problem}</p></article>
+      <article><small>TARGET USER</small><p>{project.targetUser}</p></article>
+      <article><small>SUCCESS SIGNAL</small><p>{project.successSignal}</p></article>
+    </div>
+    <div className="intake-next"><span className="intake-next-icon">→</span><div><b>Next: review and shape the scope</b><p>After discovery, connect this project to Jira and let the delivery team create its first issues.</p></div><button className="button subtle-button" type="button" onClick={onEdit}>Edit intake</button></div>
+  </section>;
+}
+
+function NewProjectDialog({ dialogRef, projectToEdit, onCreate, onUpdate }) {
+  const emptyForm = { name: '', client: '', problem: '', targetUser: '', successSignal: '' };
+  const [form, setForm] = useState(() => projectToEdit ? { name: projectToEdit.name, client: projectToEdit.client, problem: projectToEdit.problem, targetUser: projectToEdit.targetUser, successSignal: projectToEdit.successSignal } : emptyForm);
+  useEffect(() => setForm(projectToEdit ? { name: projectToEdit.name, client: projectToEdit.client, problem: projectToEdit.problem, targetUser: projectToEdit.targetUser, successSignal: projectToEdit.successSignal } : emptyForm), [projectToEdit]);
+  const update = (field) => (event) => setForm((current) => ({ ...current, [field]: event.target.value }));
+  const submit = (event) => {
+    event.preventDefault();
+    if (projectToEdit) onUpdate(projectToEdit.id, form);
+    else onCreate(form);
+    setForm({ name: '', client: '', problem: '', targetUser: '', successSignal: '' });
+  };
+  return <dialog className="answer-dialog project-dialog" ref={dialogRef}>
+    <form onSubmit={submit}>
+      <button className="dialog-close" type="button" aria-label="Close" onClick={() => dialogRef.current?.close()}>×</button>
+      <span className="dialog-icon project-dialog-icon">＋</span><p className="eyebrow">{projectToEdit ? 'EDIT CLIENT INTAKE' : 'NEW CLIENT PROJECT'}</p><h2>{projectToEdit ? 'Refine the brief.' : 'Start with the idea.'}</h2>
+      <p className="dialog-description">Capture the outcome and the people it should help. This creates a local intake draft; no Jira issues or agent runs start yet.</p>
+      <div className="intake-form-grid">
+        <label>Project name<input required maxLength="70" value={form.name} onChange={update('name')} placeholder="e.g. Waypoint" /></label>
+        <label>Client name<input required maxLength="70" value={form.client} onChange={update('client')} placeholder="e.g. Waypoint, Inc." /></label>
+        <label className="form-wide">What problem should this solve?<textarea required maxLength="500" rows="3" value={form.problem} onChange={update('problem')} placeholder="Describe the business problem and why it matters..." /></label>
+        <label>Who is it for?<textarea required maxLength="250" rows="2" value={form.targetUser} onChange={update('targetUser')} placeholder="The people who will use it..." /></label>
+        <label>How will success look?<textarea required maxLength="250" rows="2" value={form.successSignal} onChange={update('successSignal')} placeholder="An outcome we can measure..." /></label>
+      </div>
+      <div className="dialog-actions"><button className="button subtle-button" type="button" onClick={() => dialogRef.current?.close()}>Cancel</button><button className="button primary-button" type="submit">{projectToEdit ? 'Save intake' : 'Create intake'} <span>↗</span></button></div>
+    </form>
+  </dialog>;
+}
+
 function Dialog({ dialogRef, children, className = '' }) {
   return <dialog className={`answer-dialog ${className}`} ref={dialogRef}><form method="dialog"><button className="dialog-close" aria-label="Close">×</button>{children}</form></dialog>;
 }
 
 export default function App() {
+  const [savedProjects, setSavedProjects] = useState(readSavedProjects);
+  const projects = [...sampleProjects, ...savedProjects];
+  const [selectedProjectId, setSelectedProjectId] = useState(readSelectedProject);
+  const selectedProject = projects.find((project) => project.id === selectedProjectId) || sampleProjects[0];
+  const isDemo = Boolean(selectedProject.demo);
   const [activePanel, setActivePanel] = useState('workflow');
   const [activeView, setActiveView] = useState('project');
   const [answer, setAnswer] = useState('');
@@ -128,7 +194,57 @@ export default function App() {
   const toastTimer = useRef();
   const answerDialog = useRef(null);
   const connectionDialog = useRef(null);
+  const projectDialog = useRef(null);
   const answerInput = useRef(null);
+  const [projectToEdit, setProjectToEdit] = useState(null);
+
+  const persistProjects = (nextProjects) => {
+    setSavedProjects(nextProjects);
+    try {
+      window.localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(nextProjects));
+    } catch {
+      notify('Could not save this intake in browser storage.');
+    }
+  };
+
+  const createProject = (fields) => {
+    const project = { ...fields, id: window.crypto?.randomUUID?.() || `project-${Date.now()}`, color: 'lime', demo: false, createdAt: new Date().toISOString() };
+    persistProjects([project, ...savedProjects]);
+    setSelectedProjectId(project.id);
+    try { window.localStorage.setItem(SELECTED_PROJECT_KEY, project.id); } catch { /* Selection still works for this session. */ }
+    setActiveView('project');
+    setActivePanel('workflow');
+    projectDialog.current?.close();
+    notify('Client intake created and saved locally.');
+  };
+
+  const updateProject = (id, fields) => {
+    persistProjects(savedProjects.map((project) => project.id === id ? { ...project, ...fields } : project));
+    projectDialog.current?.close();
+    notify('Client intake updated.');
+  };
+
+  const openNewProject = () => {
+    setProjectToEdit(null);
+    window.setTimeout(() => projectDialog.current?.showModal(), 0);
+  };
+
+  const openEditProject = () => {
+    setProjectToEdit(selectedProject);
+    window.setTimeout(() => projectDialog.current?.showModal(), 0);
+  };
+
+  const selectProject = (project) => {
+    if (project.placeholder) {
+      notify('This sample project is a placeholder. Create an intake to start a client project.');
+      return;
+    }
+    setSelectedProjectId(project.id);
+    try { window.localStorage.setItem(SELECTED_PROJECT_KEY, project.id); } catch { /* Selection still works for this session. */ }
+    setActiveView('project');
+    setActivePanel('workflow');
+    setAnswer('');
+  };
 
   const notify = (message) => {
     setToast(message);
@@ -166,20 +282,21 @@ export default function App() {
   };
 
   return <div className="app-shell">
-    <Sidebar activeView={activeView} onNavigate={navigate} onConnections={() => connectionDialog.current?.showModal()} />
+    <Sidebar activeView={activeView} onNavigate={navigate} onConnections={() => connectionDialog.current?.showModal()} projects={projects} selectedProjectId={selectedProject.id} onSelectProject={selectProject} onCreateProject={openNewProject} />
     <main className="main-area" id="project">
-      <header className="topbar"><div className="breadcrumbs"><span>Projects</span><b>/</b><strong>Waypoint</strong><span className="demo-pill"><i /> DEMO RUN</span></div><div className="top-actions"><button className="icon-button" type="button" aria-label="Notifications">♧<i className="notification-dot" /></button><span className="top-divider" /><button className="help-button" type="button">? <span>Help</span></button></div></header>
+      <header className="topbar"><div className="breadcrumbs"><span>Projects</span><b>/</b><strong>{selectedProject.name}</strong><span className={`demo-pill ${isDemo ? '' : 'intake-pill'}`}><i /> {isDemo ? 'DEMO RUN' : 'LOCAL INTAKE'}</span></div><div className="top-actions"><button className="icon-button" type="button" aria-label="Notifications">♧<i className="notification-dot" /></button><span className="top-divider" /><button className="help-button" type="button">? <span>Help</span></button></div></header>
       <div className="content">
-        <section className="project-heading"><div><div className="eyebrow"><span className="live-dot" /> CLIENT PROJECT <span className="eyebrow-divider">/</span> WEB APP</div><h1>Waypoint <span className="heading-menu">⌄</span></h1><p className="project-subtitle">A calm, clear home base for independent travel planners.</p></div><div className="heading-actions"><button className="button subtle-button" id="share-button" type="button" onClick={share}><span>↗</span> Share room</button><button className="button primary-button" id="new-run" type="button" onClick={() => notify('Demo mode: connect a model provider and Jira to start a live run.')}><span>✳</span> Start a run</button></div></section>
-        <div className="project-meta-row"><div className="meta-group"><span className="client-avatar">W</span><span>Waypoint, Inc.</span><span className="meta-separator">·</span><span className="jira-mark">◆</span><a href="#workflow">WAY-24</a><span className="meta-separator">·</span><span>Updated 4 min ago</span></div><div className="health"><span className="health-ring">72</span><span><b>On track</b><small>2 items need attention</small></span><span className="health-chevron">⌄</span></div></div>
-        <section className="attention-card" id="attention"><div className="attention-icon">{answer ? '✓' : '?'}</div><div className="attention-copy"><div className="attention-kicker">{answer ? 'ANSWER RECORDED' : 'NEEDS YOUR INPUT'} <span>·</span> WAY-24</div><h2>{answer ? 'Answer shared with Alex' : 'Where should saved trips appear?'}</h2><p>{answer ? `Your answer: “${answer}” This demo records the choice locally; connect Jira to write it to WAY-24.` : 'The analyst found one open question in the brief. Clarifying it now keeps design and development aligned.'}</p>{!answer && <div className="answer-options"><button className="answer-option" type="button" onClick={() => submitAnswer('A dedicated Saved trips page')}>A dedicated Saved trips page <span>↗</span></button><button className="answer-option" type="button" onClick={() => submitAnswer('A section on the dashboard')}>A section on the dashboard <span>↗</span></button><button className="answer-option custom-answer" type="button" onClick={openAnswer}>Add a different answer <span>＋</span></button></div>}</div><div className="attention-owner"><Avatar initials="AL" tone="avatar-analyst" /><span><b>Alex · Analyst</b><small>Asked 12 min ago</small></span></div></section>
-        <div className="section-tabs" role="tablist" aria-label="Project sections">{tabs.map((tab) => <button key={tab.id} className={`tab ${activePanel === tab.id ? 'active' : ''}`} role="tab" aria-selected={activePanel === tab.id} type="button" onClick={() => setActivePanel(tab.id)}>{tab.label}{tab.count && <span className="tab-count">{tab.count}</span>}</button>)}<div className="tab-spacer" /><button className="filter-button" type="button">☷ <span>Filter</span></button><button className="more-button" type="button" aria-label="More options">···</button></div>
-        <div className="panel-stack"><div className={activePanel === 'workflow' ? '' : 'hidden'}><WorkflowPanel paused={paused} onPause={() => setPaused((value) => !value)} /></div><div className={activePanel === 'team' ? '' : 'hidden'}><TeamPanel /></div><div className={activePanel === 'artifacts' ? '' : 'hidden'}><ArtifactsPanel /></div><div className={activePanel === 'activity' ? '' : 'hidden'}><ActivityPanel /></div></div>
+        <section className="project-heading"><div><div className="eyebrow"><span className="live-dot" /> CLIENT PROJECT <span className="eyebrow-divider">/</span> {isDemo ? 'WEB APP' : 'INTAKE DRAFT'}</div><h1>{selectedProject.name} <span className="heading-menu">⌄</span></h1><p className="project-subtitle">{selectedProject.description || selectedProject.problem}</p></div><div className="heading-actions"><button className="button subtle-button" id="share-button" type="button" onClick={share}><span>↗</span> Share room</button><button className="button primary-button" id="new-run" type="button" onClick={() => notify('Live agent runs are not configured yet.')} disabled={!isDemo}><span>✳</span> Start a run</button></div></section>
+        {isDemo ? <div className="project-meta-row"><div className="meta-group"><span className="client-avatar">W</span><span>Waypoint, Inc.</span><span className="meta-separator">·</span><span className="jira-mark">◆</span><a href="#workflow">WAY-24</a><span className="meta-separator">·</span><span>Updated 4 min ago</span></div><div className="health"><span className="health-ring">72</span><span><b>On track</b><small>2 items need attention</small></span><span className="health-chevron">⌄</span></div></div> : <div className="project-meta-row intake-meta"><div className="meta-group"><span className="client-avatar">{selectedProject.client.slice(0, 1).toUpperCase()}</span><span>{selectedProject.client}</span><span className="meta-separator">·</span><span>LOCAL DRAFT · Saved in this browser</span></div></div>}
+        {isDemo && <section className="attention-card" id="attention"><div className="attention-icon">{answer ? '✓' : '?'}</div><div className="attention-copy"><div className="attention-kicker">{answer ? 'ANSWER RECORDED' : 'NEEDS YOUR INPUT'} <span>·</span> WAY-24</div><h2>{answer ? 'Answer shared with Alex' : 'Where should saved trips appear?'}</h2><p>{answer ? `Your answer: “${answer}” This demo records the choice locally; connect Jira to write it to WAY-24.` : 'The analyst found one open question in the brief. Clarifying it now keeps design and development aligned.'}</p>{!answer && <div className="answer-options"><button className="answer-option" type="button" onClick={() => submitAnswer('A dedicated Saved trips page')}>A dedicated Saved trips page <span>↗</span></button><button className="answer-option" type="button" onClick={() => submitAnswer('A section on the dashboard')}>A section on the dashboard <span>↗</span></button><button className="answer-option custom-answer" type="button" onClick={openAnswer}>Add a different answer <span>＋</span></button></div>}</div><div className="attention-owner"><Avatar initials="AL" tone="avatar-analyst" /><span><b>Alex · Analyst</b><small>Asked 12 min ago</small></span></div></section>}
+        {isDemo && <div className="section-tabs" role="tablist" aria-label="Project sections">{tabs.map((tab) => <button key={tab.id} className={`tab ${activePanel === tab.id ? 'active' : ''}`} role="tab" aria-selected={activePanel === tab.id} type="button" onClick={() => setActivePanel(tab.id)}>{tab.label}{tab.count && <span className="tab-count">{tab.count}</span>}</button>)}<div className="tab-spacer" /><button className="filter-button" type="button">☷ <span>Filter</span></button><button className="more-button" type="button" aria-label="More options">···</button></div>}
+        <div className="panel-stack">{isDemo ? <><div className={activePanel === 'workflow' ? '' : 'hidden'}><WorkflowPanel paused={paused} onPause={() => setPaused((value) => !value)} /></div><div className={activePanel === 'team' ? '' : 'hidden'}><TeamPanel /></div><div className={activePanel === 'artifacts' ? '' : 'hidden'}><ArtifactsPanel /></div><div className={activePanel === 'activity' ? '' : 'hidden'}><ActivityPanel /></div></> : <IntakePanel project={selectedProject} onEdit={openEditProject} />}</div>
         <footer className="project-footer"><span><i className="shield-icon">◈</i> Activity is auditable. Human approval required for scope changes &amp; production release.</span><a href="#settings">Run settings ↗</a></footer>
       </div>
     </main>
     {toast && <div className="toast visible" role="status" aria-live="polite">{toast}</div>}
     <Dialog dialogRef={answerDialog}><span className="dialog-icon">?</span><p className="eyebrow">CLARIFICATION · WAY-24</p><h2>Tell Alex what you want.</h2><p className="dialog-description">Your answer will be added to the Jira story and shared with the design and delivery agents.</p><label htmlFor="answer-input">Your direction</label><textarea id="answer-input" ref={answerInput} rows="4" placeholder="For example: show saved trips as a section on the dashboard..." value={answer} onChange={(event) => setAnswer(event.target.value)} /><div className="dialog-actions"><button className="button subtle-button" value="cancel">Cancel</button><button className="button primary-button" type="button" onClick={() => submitAnswer(answer)}>Send answer <span>↗</span></button></div></Dialog>
     <Dialog dialogRef={connectionDialog} className="connection-dialog"><span className="dialog-icon connection-dialog-icon">↗</span><p className="eyebrow">PROJECT CONNECTIONS</p><h2>Connected tools</h2><p className="dialog-description">The Atlassian connector in this Codex session can access the site. The static project room has no app-side OAuth or sync yet, so Waypoint remains seeded demo data.</p><a className="site-link" href="https://tinoonegithub.atlassian.net/" target="_blank" rel="noreferrer">tinoonegithub.atlassian.net <span>↗</span></a><div className="site-project"><span className="project-dot blue" /><span><b>TinoDevTeam</b><small>SCRUM · Jira Software project</small></span><span className="site-available">AVAILABLE HERE</span></div><div className="site-project"><span className="figma-connection-icon">◈</span><span><b>Figma</b><small>Not connected in this workspace</small></span><span className="site-pending">PENDING</span></div><div className="connection-next">Next app-side step <span>Build OAuth-backed Jira and Figma connections, then let the studio owner select the client project and design file.</span></div><div className="dialog-actions"><button className="button subtle-button" value="close">Close</button></div></Dialog>
+    <NewProjectDialog dialogRef={projectDialog} projectToEdit={projectToEdit} onCreate={createProject} onUpdate={updateProject} />
   </div>;
 }

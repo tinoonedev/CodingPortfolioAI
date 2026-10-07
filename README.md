@@ -19,6 +19,7 @@ The Waypoint project room is a seeded, interactive demo. You can create client i
 - Jira-linked artifacts and a seeded activity trail.
 - Clarification interaction for answering the analyst’s open question.
 - Client intake creation, editing, local persistence, and project switching.
+- Human confirmation is required in Jira before each subsequent AI task; the UI currently labels this gate as demo-only because live Jira comment sync is not implemented.
 - Workflow pause/resume control and clear demo-mode messaging.
 - Responsive layout for desktop and mobile.
 

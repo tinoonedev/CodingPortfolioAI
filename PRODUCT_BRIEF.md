@@ -21,14 +21,14 @@ The UI should feel lively and game-like through presence, progress, milestones, 
 6. **QA** runs the agreed checks after implementation, records evidence, and routes failures to the relevant developer with reproducible steps. A bounded fix-and-retest loop follows.
 7. **Delivery engineer** reviews the assembled change, opens or updates the pull request, monitors CI/CD, and attaches preview and deployment evidence. Production release is an explicit approval by default.
 
-Every handoff has an owner, Jira issue, inputs, output artifact, status, and acceptance check. A failed check or missing decision reopens the right work item rather than advancing the workflow. The PM agent coordinates dependencies; it does not silently overrule the specialist responsible for the work.
+Every handoff has an owner, Jira issue, inputs, output artifact, status, and acceptance check. **Every AI task must be explicitly confirmed by a human in Jira before it starts.** After an agent completes a task, the next task cannot start until an authorized human posts a fresh confirmation comment on the relevant Jira issue. This applies to the initial task, every role and every handoff, including parallel frontend/backend work; downstream work waits until its required predecessor tasks are confirmed. A comment requesting changes or more information routes the work back to its owner, and that retry also waits for confirmation. Missing comments, ambiguous comments, Jira outages, or comments from agents never count as approval. A failed check or missing decision reopens the right work item rather than advancing the workflow. The PM agent coordinates dependencies; it does not silently overrule the specialist responsible for the work.
 
 ### Product principles
 
 - **Jira carries the work forward.** Keep the workflow state synchronized with Jira and make the issue/status behind each handoff visible. The app may keep a local event log and artifact index, but should not create a competing, hidden project state.
 - **Make progress feel tangible.** Show a studio floor or team board with specialist agents, active work, blocked items, handoffs, milestones, and recent events. Use subtle animations, badges, and project milestones as motivation; avoid points or streaks that reward speed over quality.
 - **Show real work, not staged theater.** Agent avatars, “working” states, progress, and completion derive from persisted task events and tool activity. Label simulated/demo activity clearly.
-- **Keep human decisions in the loop.** People can answer questions, edit requirements, accept artifacts, change scope, and approve sensitive actions. They should not need to approve every routine agent handoff.
+- **Require human confirmation before every task.** No AI task starts until an authorized human leaves a clear confirmation comment on its Jira issue. Completion is not permission to continue: each subsequent task or retry needs a fresh comment. A request for changes routes back to the task owner. Scope changes and production releases still require their explicit approvals as well.
 - **Treat each client project as a boundary.** Separate project data, credentials, repositories, Jira spaces, and deployment targets. Reusable playbooks may be shared by the studio, client data may not.
 - **Integrate through scoped connectors.** Prefer Jira, Figma, GitHub, CI/CD, and deployment MCP servers/connectors where available. Keep a provider adapter so an integration can use a direct API when MCP is unavailable or unsuitable.
 
@@ -142,6 +142,7 @@ Workers write structured artifacts and events to the application backend. The ba
 - Confirm first: connect external accounts, create paid resources, change the accepted scope, delete data, or publish a production release by default.
 - Always visible: show the exact action, target, permissions, cost limit, result, and rollback path for consequential tool calls.
 - Fail closed: if credentials, policy, quality gates, or deployment checks fail, stop the workflow and surface a useful next action.
+- Always pause before each AI task, including the first task and retries, until a Jira comment from an authorized human confirms that exact task/version may begin. Verify commenter identity and issue; never infer approval from issue status, agent comments, prior approvals, or silence. After a task completes, require a fresh confirmation before the next task.
 
 This still demonstrates an agentic delivery team while making the automation credible to prospective clients.
 

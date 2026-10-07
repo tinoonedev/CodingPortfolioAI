@@ -108,7 +108,8 @@ function StageCard({ stage }) {
 
 function WorkflowPanel({ paused, onPause }) {
   return <section className="panel workflow-panel">
-    <div className="workflow-summary"><div><h2>Delivery workflow</h2><p>Work advances through Jira. Each handoff includes an owner and a check.</p></div><div className="workflow-legend"><span><i className="legend-active" /> In progress</span><span><i className="legend-blocked" /> Needs input</span><span><i className="legend-done" /> Complete</span></div></div>
+    <div className="workflow-summary"><div><h2>Delivery workflow</h2><p>Work advances through Jira. Each handoff waits for a human confirmation comment.</p></div><div className="workflow-legend"><span><i className="legend-active" /> In progress</span><span><i className="legend-blocked" /> Needs input</span><span><i className="legend-done" /> Complete</span></div></div>
+    <div className="human-gate"><span className="human-gate-icon">✋</span><div><b>Human confirmation gates every task</b><p>Each task stays queued until a human confirms it in Jira; after it finishes, the next task needs a fresh confirmation. Demo only: this prototype does not read or write Jira comments.</p></div><span className="human-gate-badge">REQUIRED</span></div>
     <div className="pipeline" id="workflow">{stages.map((stage, index) => <Fragment key={stage.number}><StageCard stage={stage} />{index < stages.length - 1 && <div className={`handoff ${index === 0 ? 'done-handoff' : ''}`}><span>{index === 0 ? '↗' : '→'}</span></div>}</Fragment>)}</div>
     <div className="workflow-foot"><span><i className="live-dot" /> Last handoff: Mika updated WAY-24 <b>· 4 min ago</b></span><button id="pause-run" type="button" onClick={onPause}>{paused ? '▶' : 'Ⅱ'} <span>{paused ? 'Resume workflow' : 'Pause workflow'}</span></button></div>
   </section>;

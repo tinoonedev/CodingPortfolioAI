@@ -30,3 +30,8 @@
 .project-dialog-icon{background:#303a27;color:var(--lime)}
 .button:disabled{opacity:.45;cursor:not-allowed;filter:saturate(.4)}
 @media(max-width:650px){.intake-grid{grid-template-columns:1fr}.intake-grid article{min-height:0}.intake-next{align-items:flex-start;flex-wrap:wrap}.intake-next .button{margin-left:38px}.intake-form-grid{grid-template-columns:1fr}.form-wide{grid-column:auto}.intake-status{font-size:6px}.intake-panel{padding:14px}}
+.human-gate{display:flex;align-items:center;gap:11px;margin:14px 0;padding:12px 14px;border:1px solid #6b5934;border-radius:4px;background:#29251b}
+.human-gate-icon{width:27px;height:27px;display:grid;place-items:center;border-radius:50%;background:#3d3523;color:#ebc975;font-size:12px;flex:none}
+.human-gate b{color:#f0dfae;font-size:10px}.human-gate p{margin:4px 0 0;color:#b7ae96;font-size:9px;line-height:1.5}
+.human-gate-badge{margin-left:auto;padding:5px 7px;border:1px solid #77633a;border-radius:3px;color:#edcf83;font:7px var(--mono);letter-spacing:.08em;white-space:nowrap}
+@media(max-width:650px){.human-gate{align-items:flex-start}.human-gate-badge{font-size:6px}}

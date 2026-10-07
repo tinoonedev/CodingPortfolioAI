@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-The current project room is a seeded, interactive demo. The Atlassian connector available to this Codex session can access `https://tinoonegithub.atlassian.net/` and its `SCRUM` / `TinoDevTeam` project, but the browser app itself has no Jira OAuth or synchronization yet. Figma, GitHub, model-provider, and deployment connections are also not wired into the app. Demo actions are labeled and do not claim to perform external work.
+The Waypoint project room is a seeded, interactive demo. You can create client intake drafts from the project list; drafts and the selected project are stored in this browser with `localStorage`. Intake drafts do not create Jira issues or start agent runs. The Atlassian connector available to this Codex session can access `https://tinoonegithub.atlassian.net/` and its `SCRUM` / `TinoDevTeam` project, but the browser app itself has no Jira OAuth or synchronization yet. Figma, GitHub, model-provider, and deployment connections are also not wired into the app. Demo actions are labeled and do not claim to perform external work.
 
 ## Current prototype
 
@@ -18,6 +18,7 @@ The current project room is a seeded, interactive demo. The Atlassian connector 
 - Agent roster with role, task, and state.
 - Jira-linked artifacts and a seeded activity trail.
 - Clarification interaction for answering the analyst’s open question.
+- Client intake creation, editing, local persistence, and project switching.
 - Workflow pause/resume control and clear demo-mode messaging.
 - Responsive layout for desktop and mobile.
 

@@ -5,7 +5,9 @@
 ## Jira task
 
 - Jira issue:
+- Development-log subtask:
 - Task revision:
+- [ ] The development-log subtask is linked to the parent and has current progress, decision, and verification evidence
 
 ## Verification
 

@@ -23,7 +23,9 @@ export function validateHumanTaskApproval({ comment, issueKey, taskRevision, pro
     return { approved: false, reason: 'stale-or-unverifiable-comment' };
   }
 
-  const match = approvalPattern.exec(comment.body?.trim() || '');
+  const rawBody = typeof comment.body === 'string' ? comment.body.trim() : '';
+  const body = rawBody.startsWith('`') && rawBody.endsWith('`') ? rawBody.slice(1, -1).trim() : rawBody;
+  const match = approvalPattern.exec(body);
   if (!match || match[1] !== issueKey || match[2] !== String(taskRevision)) {
     return { approved: false, reason: 'approval-does-not-match-task-revision' };
   }

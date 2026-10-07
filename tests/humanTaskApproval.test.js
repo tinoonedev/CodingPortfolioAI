@@ -19,6 +19,11 @@ test('accepts an authorized Jira comment for the exact issue and task revision',
   assert.deepEqual(validateHumanTaskApproval({ ...context, comment }), { approved: true, reason: 'approved' });
 });
 
+test('accepts Jira markdown rendering an exact approval as inline code', () => {
+  const result = validateHumanTaskApproval({ ...context, comment: { ...comment, body: `\`${comment.body}\`` } });
+  assert.equal(result.approved, true);
+});
+
 test('rejects a comment from an unauthorized or missing author', () => {
   const result = validateHumanTaskApproval({ ...context, comment: { ...comment, authorAccountId: 'agent-account' } });
   assert.equal(result.reason, 'unauthorized-author');

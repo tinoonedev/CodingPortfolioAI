@@ -6,8 +6,8 @@ description: Turn Jira acceptance criteria into risk-based unit, integration, an
 # QA test planning
 
 1. Confirm the Jira task comment gate before starting; read the acceptance criteria and design artifact.
-2. Challenge criteria that are ambiguous, not observable, contradictory, or missing error/empty/loading/accessibility behavior. Ask the business analyst or product owner instead of guessing.
+2. Require Gherkin requirements using `.agents/templates/feature-requirements.feature`. Challenge criteria that are ambiguous, not observable, contradictory, or missing error/empty/loading/accessibility behavior. Ask the business analyst or product owner instead of guessing.
 3. List scenarios by unit, integration, and end-to-end level. Tag each `smoke`, `sanity`, or `regression`, and note risk, data setup, expected result, and evidence.
-4. Prefer unit tests for domain rules, integration tests for persistence/connectors, and a small set of browser tests for critical user journeys.
-5. Keep tests deterministic: isolate external apps, avoid sleeps, use explicit fixtures, and clean up created data.
+4. Use fixtures only for pure unit tests of domain rules. Integration, smoke, sanity, and end-to-end coverage must use the actual app and real test integrations rather than mock servers, intercepted routes, or canned connector responses.
+5. Keep tests deterministic without faking integrations: use dedicated test tenants/accounts, unique data, explicit waits, idempotent setup, and cleanup. If required service credentials are absent, fail with a clear setup error and report the blocked gate.
 6. Report command, environment, pass/fail, and artifact links. A failure returns to the owning agent; every fix and retest needs fresh Jira confirmation.

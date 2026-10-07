@@ -36,3 +36,5 @@ The Waypoint project room is a seeded, interactive demo. You can create client i
 - Responsive layout for desktop and mobile.
 
 See [PRODUCT_BRIEF.md](PRODUCT_BRIEF.md) for the product direction and planned vertical slice.
+
+Fictional, documentation-only client examples are maintained separately: [mobile app](docs/demo-projects/mobile-app.md), [web app](docs/demo-projects/web-app.md), and [API](docs/demo-projects/api.md). They do not create Jira issues or represent connected production runs.

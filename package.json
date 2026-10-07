@@ -9,6 +9,8 @@
     "preview": "vite preview",
     "test": "node --test tests/*.test.js",
     "test:e2e": "playwright test",
+    "test:smoke": "playwright test --grep @smoke",
+    "test:sanity": "playwright test --grep @sanity",
     "check:branch": "node scripts/check-branch-name.mjs",
     "check": "npm run check:branch && npm test && npm run build"
   },

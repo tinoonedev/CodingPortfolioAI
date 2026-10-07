@@ -27,24 +27,28 @@ Every handoff has an owner, Jira issue, inputs, output artifact, status, and acc
 
 - **Jira carries the work forward.** Keep the workflow state synchronized with Jira and make the issue/status behind each handoff visible. The app may keep a local event log and artifact index, but should not create a competing, hidden project state.
 - **Make progress feel tangible.** Show a studio floor or team board with specialist agents, active work, blocked items, handoffs, milestones, and recent events. Use subtle animations, badges, and project milestones as motivation; avoid points or streaks that reward speed over quality.
-- **Show real work, not staged theater.** Agent avatars, “working” states, progress, and completion derive from persisted task events and tool activity. Label simulated/demo activity clearly.
-- **Keep human decisions in the loop.** People can answer questions, edit requirements, accept artifacts, change scope, and approve sensitive actions. They should not need to approve every routine agent handoff.
+- **Show real work, not staged theater.** Agent presence, progress, and completion derive from persisted task events and tool activity. Production projects never use seeded work or simulated integrations; unavailable connections show a blocked state.
+- **Production has no mocked integrations.** A feature uses its real, authorized service connection or remains unavailable and visibly blocked. Test fixtures may cover pure domain rules, but service health and integration behavior are verified against real test accounts.
+- **Make requirements testable.** The business analyst records each requirement as precise Gherkin and links every scenario to Jira and QA coverage. QA returns vague or contradictory criteria before implementation.
+- **Build security into the repository.** Protect credentials, isolate projects, validate every external action, treat MCP/model content as untrusted, audit writes, and fail closed when identity or authorization cannot be verified.
+- **Gate every feature in CI.** Every feature pull request runs unit tests, production build, dependency/static security checks, and tagged smoke and sanity browser suites. Failures block delivery.
+- **Keep human decisions in the loop.** People can answer questions, edit requirements, accept artifacts, change scope, and authorize sensitive actions such as external writes or production releases. Routine agent handoffs do not require separate approval.
 - **Treat each client project as a boundary.** Separate project data, credentials, repositories, Jira spaces, and deployment targets. Reusable playbooks may be shared by the studio, client data may not.
 - **Integrate through scoped connectors.** Prefer Jira, Figma, GitHub, CI/CD, and deployment MCP servers/connectors where available. Keep a provider adapter so an integration can use a direct API when MCP is unavailable or unsuitable.
 
 ### First product slice
 
-Start with one studio workspace and one client project room. Demonstrate a seeded but clearly labeled run, then build the real path for a narrow web-app feature:
+Start with one authenticated studio workspace and one deliberately selected client project. Build a real path for a narrow web-app feature. Do not ship a seeded run or simulated connector as a substitute for production behavior. If a required service credential or project selection is unavailable, keep the workflow blocked and show the concrete setup action:
 
 1. Capture a client request and produce an editable, reviewable brief.
 2. Resolve ambiguities and get scope approval.
 3. Create Jira work and move it through defined statuses.
-4. Produce a wireframe/design handoff (Figma link or a local artifact in demo mode).
+4. Produce a wireframe/design handoff in the selected Figma project.
 5. Draft QA coverage, implement a small frontend/backend change, and run checks.
 6. Open a PR and publish a preview deployment with evidence.
 7. Show the full activity trail, artifacts, blockers, and human decisions in the interactive project room.
 
-Use a demo connector mode before asking reviewers to provide credentials. The demo should distinguish seeded events from live agent execution and never present a mock deployment as a real release.
+Use dedicated test accounts for integration checks. Keep the legacy Waypoint prototype labeled as a prototype until it is replaced; it is not evidence of a connected production workflow. Never present an unavailable integration as successful.
 
 ### Jira setup discovered during development
 
@@ -105,13 +109,13 @@ Use managed Temporal Cloud for the first reliable workflow runtime rather than h
 
 The first release should complete one small example project from idea to preview, not pretend to support every business or every technology stack.
 
-- One authenticated user and one sample project.
+- One authenticated user and one explicitly connected client project.
 - Idea intake form that produces an editable product brief and acceptance criteria.
 - A deterministic workflow with product, planner, developer, and QA roles. Agents may share a model provider initially; roles are defined by responsibilities and tools, not by the number of models.
 - Create a Jira project or a small set of issues after the user connects Jira and confirms the target project.
 - Generate a small web app in an isolated repository/branch, run checks, and publish a preview deployment.
 - Web timeline shows each agent's task, state, artifacts, costs, retries, and check results. Mobile app can view progress and stop a run.
-- Use a mocked integration mode for portfolio demos so reviewers can try the flow without giving the app Jira, GitHub, or cloud credentials.
+- Use real, scoped test accounts for Jira, GitHub, the model provider, and deployment. If the required credentials are not configured, fail the release gate rather than falling back to mocked behavior.
 
 Explicitly defer multi-tenant billing, arbitrary infrastructure generation, unrestricted terminal access, automatic production deployments, and broad framework support.
 
@@ -148,7 +152,7 @@ This still demonstrates an agentic delivery team while making the automation cre
 ## Portfolio evidence to produce
 
 1. A short product brief and architecture diagram.
-2. A clickable workflow dashboard with a seeded end-to-end run.
+2. A clickable workflow dashboard showing a verified real run and evidence from connected services.
 3. A working vertical slice that generates one tiny app, runs QA, and deploys a preview.
-4. A 2–3 minute demo showing agent handoffs, Jira issues, QA evidence, and preview deployment.
+4. A 2–3 minute product walkthrough showing real agent handoffs, Jira issues, QA evidence, and preview deployment.
 5. A case study with run success rate, time to preview, cost per run, human interventions, and failure examples.

@@ -10,8 +10,12 @@
 ## Verification
 
 - [ ] `npm run check` or CI checks pass
+- [ ] `npm run test:smoke` passes
+- [ ] `npm run test:sanity` passes
+- [ ] Dependency audit and static security analysis pass
+- [ ] Secret scan passes
 - [ ] UI behavior reviewed at desktop and mobile sizes (when applicable)
-- [ ] Demo/live integration boundaries are accurately labeled
+- [ ] Real integrations are exercised; no mock, stub, route interception, or fake success is used as evidence
 
 ## Risks and follow-up
 

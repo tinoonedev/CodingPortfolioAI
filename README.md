@@ -20,7 +20,7 @@ npm run dev
 - GitHub Actions runs branch validation, unit tests, npm audit, a production build, and separate Playwright smoke/sanity suites on every feature pull request. Dependabot checks npm and GitHub Action updates weekly.
 - Do not add mocked connectors or fake success paths. The current Waypoint room is seeded legacy demo data, clearly labeled as demo; it is not a production integration. New work must use real services or remain blocked/not configured until the connection is available.
 
-For repository conventions and agent handoffs, start with [`.agents/README.md`](.agents/README.md) and [SECURITY.md](SECURITY.md).
+For repository conventions and agent handoffs, start with [`.agents/README.md`](.agents/README.md) and [SECURITY.md](SECURITY.md). Before implementing a live connector, follow the [integration readiness contract](docs/integration-readiness.md) for ownership, minimum permissions, audit evidence, and failure handling.
 
 The Waypoint project room is a seeded, interactive demo. You can create client intake drafts from the project list; drafts and the selected project are stored in this browser with `localStorage`. Intake drafts do not create Jira issues or start agent runs. The Atlassian connector available to this Codex session can access `https://tinoonegithub.atlassian.net/` and its `SCRUM` / `TinoDevTeam` project, but the browser app itself has no Jira OAuth or synchronization yet. Figma, GitHub, model-provider, and deployment connections are also not wired into the app. Demo actions are labeled and do not claim to perform external work.
 

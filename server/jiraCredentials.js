@@ -223,7 +223,7 @@ export async function disconnectJiraConnection(pool, workspaceId, projectId) {
   const result = await pool.query(
     `UPDATE studio_jira_connections
      SET status = 'disconnected', encrypted_credentials = NULL, credential_key_id = NULL, updated_at = now()
-     WHERE workspace_id = $1 AND project_id = $2
+     WHERE workspace_id = $1 AND project_id = $2 AND status = 'connected'
      RETURNING id, workspace_id, project_id, cloud_id, site_url, jira_project_id, jira_project_key, status, updated_at`,
     [workspaceId, projectId],
   );

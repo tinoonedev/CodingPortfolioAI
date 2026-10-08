@@ -33,7 +33,7 @@ Every handoff has an owner, Jira issue, inputs, output artifact, status, and acc
 - **Build security into the repository.** Protect credentials, isolate projects, validate every external action, treat MCP/model content as untrusted, audit writes, and fail closed when identity or authorization cannot be verified.
 - **Gate every feature in CI.** Every feature pull request runs branch validation, unit tests, production build, dependency audit, and tagged smoke and sanity browser suites. Failures block delivery. Additional static-analysis workflows can be added as the delivery pipeline matures.
 - **Keep human decisions in the loop.** People can answer questions, edit requirements, accept artifacts, change scope, and authorize sensitive actions such as external writes or production releases. Routine agent handoffs do not require separate approval.
-- **Treat each client project as a boundary.** Separate project data, credentials, repositories, Jira spaces, and deployment targets. Reusable playbooks may be shared by the studio, client data may not.
+- **Treat each client project as a boundary.** Separate project data, credentials, repositories, and deployment targets inside Fieldwork. The initial Jira integration uses the shared TinoDevTeam `SCRUM` project, so Jira project members can see tickets for every client; do not imply that Fieldwork provides client-specific Jira visibility.
 - **Integrate through scoped connectors.** Prefer Jira, Figma, GitHub, CI/CD, and deployment MCP servers/connectors where available. Keep a provider adapter so an integration can use a direct API when MCP is unavailable or unsuitable.
 
 ### First product slice
@@ -55,7 +55,7 @@ Use dedicated test accounts for integration checks. Keep the legacy Waypoint pro
 - Site: `https://tinoonegithub.atlassian.net/`
 - Visible Jira project: `SCRUM` — `TinoDevTeam`
 - The current Codex Atlassian connection can access the site. This does not grant the static browser app access; app-side OAuth, credential storage, project selection, and synchronization still need to be implemented.
-- Keep the seeded Waypoint project separate from `SCRUM` until the studio owner deliberately selects a real client project. Do not write demo requirements into the user's Jira project.
+- `SCRUM` is the shared Jira project for Fieldwork and client work in this workspace. Client issue summaries use `[Client Name] - Feature Title`; the prefix helps people scan the board but is not a Jira permission boundary. Do not create demo-client issues without a real user request.
 
 ## Product idea
 
@@ -155,7 +155,7 @@ This still demonstrates an agentic delivery team while making the automation cre
 
 - Fieldwork is a web-first React studio control room, with mobile and API clients represented as separate demo project briefs.
 - Local development uses PostgreSQL in Docker and email/password accounts. This is a local development setup, not a production hosting decision.
-- Jira `SCRUM` is selected for Fieldwork repository work tracking. It is not a client project, and demo briefs must not create issues there as if they belonged to real clients.
+- Jira `SCRUM` in TinoDevTeam is the shared project for Fieldwork and client delivery work. Client issues use the `[Client Name] - Feature Title` summary convention. Existing Jira project members can see all issues; Fieldwork does not grant Jira access to clients.
 - The mandatory Jira comment gate for each repository task is temporarily suspended by SCRUM-15. Jira comments and statuses provide traceability and are not treated as task authorization.
 - Production connectors are only considered available when the app has a real, scoped connection and returned evidence. The current browser app does not have Jira, Figma, GitHub, model-provider, or deployment integrations wired in.
 - Delivery status follows **tests pass → Ready for Release → PR to `development` → Done after confirmed merge**. A failed PR check or review returns work to In Progress for remediation and retest.

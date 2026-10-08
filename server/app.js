@@ -81,6 +81,13 @@ function toProject(row) {
   };
 }
 
+function redirectJiraCallback(response, config, outcome, projectId) {
+  const target = new URL('/', config.appOrigin);
+  target.searchParams.set('jira', outcome);
+  if (typeof projectId === 'string' && UUID_PATTERN.test(projectId)) target.searchParams.set('projectId', projectId);
+  return response.redirect(303, `${target.pathname}${target.search}`);
+}
+
 function projectBriefHash(project) {
   return sha256(JSON.stringify([
     project.name,
@@ -574,27 +581,33 @@ export function createWorkspaceApp({ config, pool, jiraOAuthConfig = { configure
     }
   });
 
-  app.get('/api/integrations/jira/callback', requireSession, async (request, response) => {
-    if (request.workspaceSession.role !== 'owner') {
-      return response.status(403).json({ error: { code: 'OWNER_REQUIRED', message: 'Only a workspace owner can complete Jira authorization.' } });
+  app.get('/api/integrations/jira/callback', async (request, response) => {
+    let session;
+    try {
+      session = await findSession(request);
+    } catch {
+      return redirectJiraCallback(response, config, 'workspace_unavailable');
     }
+    if (!session) return redirectJiraCallback(response, config, 'sign_in_required');
+    if (session.role !== 'owner') return redirectJiraCallback(response, config, 'owner_required');
     const state = typeof request.query.state === 'string' ? request.query.state : '';
     const code = typeof request.query.code === 'string' ? request.query.code : '';
     const providerError = typeof request.query.error === 'string' ? request.query.error : '';
     const sessionToken = cookieValue(request, config.cookieName);
     if (!sessionToken || !state) {
-      return response.status(400).json({ error: { code: 'JIRA_CALLBACK_INVALID', message: 'The Jira authorization response is invalid or expired. Start authorization again.' } });
+      return redirectJiraCallback(response, config, 'callback_invalid');
     }
+    let transaction;
     try {
-      const transaction = await consumeJiraOAuthTransaction(pool, { state, sessionTokenHash: sha256(sessionToken) });
+      transaction = await consumeJiraOAuthTransaction(pool, { state, sessionTokenHash: sha256(sessionToken) });
       if (!transaction) {
-        return response.status(400).json({ error: { code: 'JIRA_CALLBACK_INVALID', message: 'The Jira authorization response is invalid, expired, or already used. Start authorization again.' } });
+        return redirectJiraCallback(response, config, 'callback_invalid');
       }
       if (providerError || !code) {
-        return response.status(400).json({ error: { code: 'JIRA_AUTHORIZATION_DENIED', message: 'Jira authorization was denied or did not return a code.' } });
+        return redirectJiraCallback(response, config, 'authorization_denied', transaction.project_id);
       }
       if (jiraOAuthConfig.configured !== true) {
-        return response.status(503).json({ error: { code: 'JIRA_SETUP_REQUIRED', message: 'Jira OAuth is not configured on this Fieldwork server.' } });
+        return redirectJiraCallback(response, config, 'setup_required', transaction.project_id);
       }
       const tokenBundle = await exchangeJiraAuthorizationCode(code, jiraOAuthConfig);
       await storePendingJiraAuthorization(pool, {
@@ -603,14 +616,9 @@ export function createWorkspaceApp({ config, pool, jiraOAuthConfig = { configure
         userSubject: transaction.user_subject,
         sessionTokenHash: transaction.session_token_hash,
       }, tokenBundle, jiraOAuthConfig.keyring);
-      return response.json({ status: 'authorization_received', projectId: transaction.project_id, siteAndProjectSelectionRequired: true });
+      return redirectJiraCallback(response, config, 'authorization_received', transaction.project_id);
     } catch (error) {
-      const message = error?.message === 'Atlassian token exchange is unavailable.'
-        ? 'Atlassian could not be reached. Start Jira authorization again.'
-        : error?.message === 'Atlassian rejected the Jira authorization code.'
-          ? 'Atlassian rejected this authorization code. Start Jira authorization again.'
-          : 'Jira authorization could not be completed. Start again; no connection was created.';
-      return response.status(502).json({ error: { code: 'JIRA_AUTHORIZATION_FAILED', message } });
+      return redirectJiraCallback(response, config, 'authorization_failed', transaction?.project_id);
     }
   });
 

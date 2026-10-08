@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 const emptyBrief = { name: '', client: '', problem: '', targetUser: '', successSignal: '', approved: false };
 
@@ -22,6 +22,184 @@ async function api(path, options = {}) {
     throw error;
   }
   return body;
+}
+
+const jiraCallbackMessages = {
+  authorization_received: 'Atlassian authorization succeeded. Select the accessible site and project to finish connecting.',
+  authorization_denied: 'Atlassian authorization was denied. The project remains disconnected; you can start again.',
+  authorization_failed: 'Jira authorization could not be completed. The project remains disconnected; start again.',
+  setup_required: 'Jira OAuth is not configured on this Fieldwork server.',
+  callback_invalid: 'The Jira authorization response was invalid, expired, or already used. Start again.',
+  sign_in_required: 'Sign in to Fieldwork before completing Jira authorization, then start the connection again.',
+  owner_required: 'Only a workspace owner can complete Jira authorization.',
+  workspace_unavailable: 'The workspace could not verify the Jira authorization. Try again when it is available.',
+};
+
+function readJiraCallback() {
+  const params = new URLSearchParams(window.location.search);
+  const outcome = params.get('jira');
+  const projectId = params.get('projectId');
+  const result = Object.hasOwn(jiraCallbackMessages, outcome)
+    ? { outcome, projectId: projectId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(projectId) ? projectId : null }
+    : null;
+  if (params.has('jira') || params.has('projectId')) window.history.replaceState(null, '', `${window.location.pathname}${window.location.hash}`);
+  return result;
+}
+
+function JiraConnectionPanel({ project, canEdit, callbackResult, onCallbackHandled }) {
+  const [connectionState, setConnectionState] = useState({ loading: true, data: null });
+  const [sites, setSites] = useState([]);
+  const [siteId, setSiteId] = useState('');
+  const [search, setSearch] = useState('');
+  const [searchResults, setSearchResults] = useState(null);
+  const [selectedJiraProjectId, setSelectedJiraProjectId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [notice, setNotice] = useState('');
+  const [choosing, setChoosing] = useState(false);
+
+  const loadConnection = useCallback(async () => {
+    setConnectionState((current) => ({ ...current, loading: true }));
+    try {
+      const data = await api(`/api/projects/${project.id}/jira/connection`);
+      setConnectionState({ loading: false, data });
+    } catch (requestError) {
+      setConnectionState({ loading: false, data: null });
+      setError(requestError);
+    }
+  }, [project.id]);
+
+  const loadSites = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await api(`/api/projects/${project.id}/jira/authorization/sites`);
+      setSites(result.sites);
+      setSiteId(result.sites[0]?.id || '');
+      setChoosing(true);
+      setNotice(result.sites.length > 0
+        ? 'Choose the Jira site and project this client project should use.'
+        : 'No accessible Jira sites were returned. Confirm the Atlassian account has Jira access, then connect again.');
+    } catch (requestError) {
+      setError(requestError);
+      setChoosing(false);
+    } finally {
+      setBusy(false);
+    }
+  }, [project.id]);
+
+  useEffect(() => {
+    loadConnection();
+    if (callbackResult) {
+      setNotice(jiraCallbackMessages[callbackResult.outcome]);
+      onCallbackHandled();
+      if (callbackResult.outcome === 'authorization_received') loadSites();
+    }
+  }, [callbackResult, loadConnection, loadSites, onCallbackHandled]);
+
+  const beginAuthorization = async () => {
+    setBusy(true);
+    setError(null);
+    setNotice('');
+    try {
+      const result = await api(`/api/projects/${project.id}/jira/authorization`, { method: 'POST' });
+      const authorizationUrl = new URL(result.authorizationUrl);
+      if (authorizationUrl.protocol !== 'https:' || authorizationUrl.origin !== 'https://auth.atlassian.com') {
+        throw new Error('Fieldwork returned an unexpected Jira authorization destination. No navigation occurred.');
+      }
+      window.location.assign(authorizationUrl.toString());
+    } catch (requestError) {
+      setError(requestError);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const searchProjects = async (event, startAt = 0) => {
+    event?.preventDefault();
+    if (!siteId) return;
+    setBusy(true);
+    setError(null);
+    setSearchResults(null);
+    setSelectedJiraProjectId('');
+    try {
+      const params = new URLSearchParams({ query: search, startAt: String(startAt), maxResults: '25' });
+      const result = await api(`/api/projects/${project.id}/jira/authorization/sites/${encodeURIComponent(siteId)}/projects?${params}`);
+      setSearchResults(result);
+    } catch (requestError) {
+      setError(requestError);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmSelection = async () => {
+    if (!siteId || !selectedJiraProjectId) return;
+    setBusy(true);
+    setError(null);
+    setNotice('Verifying the selected Jira project…');
+    try {
+      await api(`/api/projects/${project.id}/jira/authorization/selection`, {
+        method: 'POST',
+        body: JSON.stringify({ cloudId: siteId, jiraProjectId: selectedJiraProjectId }),
+      });
+      const verified = await api(`/api/projects/${project.id}/jira/connection`);
+      if (verified.status !== 'connected' || !verified.connection || verified.connection.cloud_id !== siteId || verified.connection.jira_project_id !== selectedJiraProjectId) {
+        throw new Error('Fieldwork could not verify the saved Jira connection. The connection is not shown as connected; reload to check its server status.');
+      }
+      setConnectionState({ loading: false, data: verified });
+      setChoosing(false);
+      setSearchResults(null);
+      setNotice(`Connected to ${verified.connection.jira_project_key} and verified by Fieldwork.`);
+    } catch (requestError) {
+      setError(requestError);
+      await loadConnection();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const connection = connectionState.data?.connection;
+  const setup = connectionState.data?.setup;
+  const currentPage = searchResults ? Math.floor(searchResults.startAt / searchResults.maxResults) + 1 : 0;
+
+  return <section className="jira-connection-panel" aria-labelledby="jira-connection-title">
+    <div className="jira-panel-heading"><div><p className="eyebrow">PROJECT INTEGRATION</p><h3 id="jira-connection-title">Jira connection</h3><p>Connect one verified Jira project to this client workspace.</p></div><span className={`jira-status-chip ${connection?.status === 'connected' ? 'is-connected' : ''}`} role="status">{connectionState.loading ? 'Checking…' : connection?.status === 'connected' ? 'Connected' : connection?.status === 'disconnected' ? 'Disconnected' : 'Not connected'}</span></div>
+    {connectionState.data?.configured === false && <div className="jira-setup-notice"><b>Jira OAuth setup required</b><p>Fieldwork will show a connected state only after a real Jira authorization and project verification.</p>{(setup?.missing?.length > 0 || setup?.invalid?.length > 0) && <ul>{[...(setup.missing || []), ...(setup.invalid || [])].map((setting) => <li key={setting}><code>{setting}</code></li>)}</ul>}</div>}
+    {connection?.status === 'connected' && <div className="jira-connected-details"><span><small>JIRA SITE</small><b>{connection.site_url}</b></span><span><small>PROJECT</small><b>{connection.jira_project_key}</b></span></div>}
+    {notice && <p className="jira-panel-notice" role="status">{notice}</p>}
+    {error && <div className="workspace-alert jira-panel-error" role="alert"><b>{error.message}</b>{((error.missing?.length || 0) > 0 || (error.invalid?.length || 0) > 0) && <ul>{[...(error.missing || []), ...(error.invalid || [])].map((setting) => <li key={setting}><code>{setting}</code></li>)}</ul>}</div>}
+    {canEdit && <div className="jira-panel-actions">
+      {connection?.status !== 'connected' && <button className="button primary-button" type="button" disabled={busy || connectionState.loading || choosing} onClick={beginAuthorization}>{busy ? 'Working…' : 'Connect Jira'} <span>↗</span></button>}
+      {connection?.status === 'connected' && <button className="button subtle-button" type="button" disabled={busy} onClick={beginAuthorization}>Reconnect Jira</button>}
+      {!connectionState.data && !connectionState.loading && <button className="button subtle-button" type="button" onClick={() => { setError(null); loadConnection(); }}>Reload status</button>}
+    </div>}
+    {choosing && canEdit && <div className="jira-selection-flow" aria-labelledby="jira-selection-title">
+      <h4 id="jira-selection-title">Select a Jira project</h4>
+      {sites.length === 0 && <p className="jira-panel-muted">No accessible Jira sites were returned. Confirm the Atlassian account has Jira access, then restart authorization.</p>}
+      <label htmlFor={`jira-site-${project.id}`}>Accessible Jira site</label>
+      <select id={`jira-site-${project.id}`} value={siteId} disabled={busy || sites.length === 0} onChange={(event) => { setSiteId(event.target.value); setSearchResults(null); setSelectedJiraProjectId(''); }}>
+        {sites.length === 0 && <option value="">No accessible Jira sites</option>}
+        {sites.map((site) => <option key={site.id} value={site.id}>{site.name} · {site.url}</option>)}
+      </select>
+      <form className="jira-project-search" onSubmit={searchProjects}>
+        <label htmlFor={`jira-project-search-${project.id}`}>Search Jira projects</label>
+        <div><input id={`jira-project-search-${project.id}`} value={search} maxLength="200" onChange={(event) => setSearch(event.target.value)} placeholder="Search by project name" /><button className="button subtle-button" type="submit" disabled={busy || !siteId}>Search</button></div>
+      </form>
+      {searchResults && <>
+        <label htmlFor={`jira-project-${project.id}`}>Matching Jira project</label>
+        <select id={`jira-project-${project.id}`} value={selectedJiraProjectId} onChange={(event) => setSelectedJiraProjectId(event.target.value)}>
+          <option value="">Select a project</option>
+          {searchResults.values.map((item) => <option key={item.id} value={item.id}>{item.key} · {item.name}</option>)}
+        </select>
+        {searchResults.values.length === 0 && <p className="jira-panel-muted">No Jira projects matched this search.</p>}
+        <div className="jira-results-footer"><span>{searchResults.total} project(s) · page {currentPage}</span><div><button className="requirements-retry" type="button" disabled={busy || searchResults.startAt === 0} onClick={() => searchProjects(null, Math.max(0, searchResults.startAt - searchResults.maxResults))}>Previous</button><button className="requirements-retry" type="button" disabled={busy || searchResults.isLast} onClick={() => searchProjects(null, searchResults.startAt + searchResults.maxResults)}>Next</button></div></div>
+      </>}
+      {sites.length === 0 && <button className="button subtle-button" type="button" disabled={busy} onClick={beginAuthorization}>Restart Jira authorization</button>}
+      <button className="button primary-button jira-confirm-button" type="button" disabled={busy || !selectedJiraProjectId} onClick={confirmSelection}>{busy ? 'Verifying…' : 'Verify and connect project'} <span>↗</span></button>
+    </div>}
+    {!canEdit && !connectionState.loading && <p className="jira-panel-muted">Only a workspace owner can change this Jira connection.</p>}
+  </section>;
 }
 
 function SetupNotice({ error, onRetry }) {
@@ -232,7 +410,7 @@ function RequirementsPanel({ project, canEdit }) {
   </section>;
 }
 
-function ProjectDetails({ project, canEdit, onSaveBrief }) {
+function ProjectDetails({ project, canEdit, onSaveBrief, jiraCallback, onJiraCallbackHandled }) {
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -259,11 +437,15 @@ function ProjectDetails({ project, canEdit, onSaveBrief }) {
       <div className="workspace-project-footer"><span>Created {new Date(project.createdAt).toLocaleDateString()}</span><span>Workspace access checked on every request</span>{canEdit && <button className="workspace-edit-brief" type="button" onClick={() => { setEditing(true); setError(''); }}>Edit approved brief</button>}</div>
     </section>
     {editing && <BriefEditor project={project} onCancel={() => setEditing(false)} onSave={saveBrief} busy={busy} error={error} />}
+    <JiraConnectionPanel project={project} canEdit={canEdit} callbackResult={jiraCallback} onCallbackHandled={onJiraCallbackHandled} />
     <RequirementsPanel key={project.id} project={project} canEdit={canEdit} />
   </div>;
 }
 
 export default function Workspace() {
+  const [jiraReturn] = useState(readJiraCallback);
+  const handledJiraReturn = useRef(false);
+  const handleJiraCallbackHandled = useCallback(() => { handledJiraReturn.current = true; }, []);
   const [state, setState] = useState({ loading: true, session: null, projects: [], selectedId: null, setupError: null, signInError: '' });
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState('');
@@ -273,7 +455,8 @@ export default function Workspace() {
     try {
       const { user, workspace } = await api('/api/session');
       const { projects } = await api('/api/projects');
-      setState({ loading: false, session: { user, workspace }, projects, selectedId: projects[0]?.id || null, setupError: null, signInError: '' });
+      const callbackProjectExists = jiraReturn?.projectId && projects.some((project) => project.id === jiraReturn.projectId);
+      setState({ loading: false, session: { user, workspace }, projects, selectedId: callbackProjectExists ? jiraReturn.projectId : projects[0]?.id || null, setupError: null, signInError: '' });
     } catch (error) {
       if (error.code === 'SETUP_REQUIRED' || error.code === 'WORKSPACE_UNAVAILABLE') {
         setState({ loading: false, session: null, projects: [], selectedId: null, setupError: error, signInError: '' });
@@ -283,7 +466,7 @@ export default function Workspace() {
         setState({ loading: false, session: null, projects: [], selectedId: null, setupError: null, signInError: 'The workspace could not be reached. Check the connection and try again.' });
       }
     }
-  }, []);
+  }, [jiraReturn]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -320,14 +503,17 @@ export default function Workspace() {
     return <main className="workspace-page"><div className="workspace-loading" role="status"><i className="live-dot" /> Checking workspace access…</div></main>;
   }
   if (state.setupError) return <SetupNotice error={state.setupError} onRetry={load} />;
-  if (!state.session) return <SignIn initialError={state.signInError} />;
+  if (!state.session) return <SignIn initialError={jiraReturn?.outcome === 'sign_in_required' ? jiraCallbackMessages.sign_in_required : state.signInError} />;
 
   const selectedProject = state.projects.find((project) => project.id === state.selectedId);
+  const callbackProjectExists = jiraReturn?.projectId && state.projects.some((project) => project.id === jiraReturn.projectId);
+  const showJiraCallbackGlobally = jiraReturn && !handledJiraReturn.current && (!jiraReturn.projectId || !callbackProjectExists);
   return <main className="workspace-page workspace-authenticated">
     <header className="workspace-topbar">
       <div className="workspace-brand"><span className="brand-mark">f</span><span>FIELDWORK<small>AI PRODUCT STUDIO</small></span></div>
       <div className="workspace-user"><span><b>{state.session.workspace.name}</b><small>{state.session.user.email}</small></span><button className="button subtle-button" type="button" onClick={signOut}>Sign out</button></div>
     </header>
+    {showJiraCallbackGlobally && <p className="workspace-alert jira-global-notice" role="status">{jiraReturn.projectId ? 'The Jira authorization could not be matched to a client project in this workspace. No connection was changed.' : jiraCallbackMessages[jiraReturn.outcome]}</p>}
     {state.session.user.role === 'owner' && <WorkspaceInvitation />}
     <section className="workspace-content">
       <div className="workspace-page-heading"><div><p className="eyebrow"><span className="live-dot" /> STUDIO OPERATIONS</p><h1>Your projects, built on real work.</h1><p>Client briefs are private to this workspace and persist on the server.</p></div><span className="workspace-project-count">{state.projects.length} {state.projects.length === 1 ? 'PROJECT' : 'PROJECTS'}</span></div>
@@ -338,7 +524,7 @@ export default function Workspace() {
           {state.projects.length === 0 && <p className="workspace-empty-list">Your first client project will appear here.</p>}
         </aside>
         <div className="workspace-main-panel">
-          {selectedProject ? <ProjectDetails project={selectedProject} canEdit={state.session.user.role === 'owner'} onSaveBrief={saveProjectBrief} /> : <ProjectForm onCreate={createProject} busy={busy} error={formError} />}
+          {selectedProject ? <ProjectDetails key={selectedProject.id} project={selectedProject} canEdit={state.session.user.role === 'owner'} onSaveBrief={saveProjectBrief} jiraCallback={jiraReturn?.projectId === selectedProject.id && !handledJiraReturn.current ? jiraReturn : null} onJiraCallbackHandled={handleJiraCallbackHandled} /> : <ProjectForm onCreate={createProject} busy={busy} error={formError} />}
           {selectedProject && <button className="workspace-add-project" type="button" onClick={() => setState((current) => ({ ...current, selectedId: null }))}>＋ Add a client project</button>}
         </div>
       </div>

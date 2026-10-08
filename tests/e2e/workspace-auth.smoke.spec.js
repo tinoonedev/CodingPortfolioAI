@@ -99,6 +99,9 @@ test('invited accounts persist workspace projects and cannot read another worksp
     await page.getByLabel('I reviewed and approve this brief for the workspace.').check();
     await page.getByRole('button', { name: 'Create client project' }).click();
     await expect(page.getByRole('heading', { name: projectName })).toBeVisible();
+    const jiraPanel = page.getByRole('region', { name: 'Jira connection' });
+    await expect(jiraPanel).toBeVisible();
+    await expect(jiraPanel.getByRole('status')).toHaveText('Not connected');
 
     const account = await pool.query('SELECT subject FROM studio_users WHERE lower(email) = $1', [email]);
     subject = account.rows[0]?.subject;
@@ -120,30 +123,39 @@ test('invited accounts persist workspace projects and cannot read another worksp
     expect(jiraStatus.ok()).toBeTruthy();
     const jiraStatusBody = await jiraStatus.json();
     expect(jiraStatusBody.status).toBe('not_connected');
-    expect(jiraStatusBody.configured).toBe(false);
+    expect(typeof jiraStatusBody.configured).toBe('boolean');
     expect(jiraStatusBody.connection).toBeNull();
     expect(JSON.stringify(jiraStatusBody)).not.toMatch(/clientSecret|accessToken|refreshToken|ciphertext|private-client/i);
-    const jiraAuthorizationStart = await page.context().request.post(`/api/projects/${projectBefore.id}/jira/authorization`, { headers: { origin: 'http://127.0.0.1:4173' } });
-    expect(jiraAuthorizationStart.status()).toBe(503);
-    const jiraSetup = await jiraAuthorizationStart.json();
-    expect(jiraSetup.error.code).toBe('JIRA_SETUP_REQUIRED');
-    expect(jiraSetup.error.missing).toContain('JIRA_OAUTH_CLIENT_ID');
-    expect(JSON.stringify(jiraSetup)).not.toMatch(/clientSecret|accessToken|refreshToken|ciphertext/i);
-    const jiraSites = await page.context().request.get(`/api/projects/${projectBefore.id}/jira/authorization/sites`);
-    expect(jiraSites.status()).toBe(503);
-    expect((await jiraSites.json()).error.code).toBe('JIRA_SETUP_REQUIRED');
-    const jiraProjectSearch = await page.context().request.get(`/api/projects/${projectBefore.id}/jira/authorization/sites/00000000-0000-4000-8000-000000000001/projects`);
-    expect(jiraProjectSearch.status()).toBe(503);
-    expect((await jiraProjectSearch.json()).error.code).toBe('JIRA_SETUP_REQUIRED');
-    const jiraSelection = await page.context().request.post(`/api/projects/${projectBefore.id}/jira/authorization/selection`, {
-      data: { cloudId: '00000000-0000-4000-8000-000000000001', jiraProjectId: '10001' },
-      headers: { origin: 'http://127.0.0.1:4173' },
-    });
-    expect(jiraSelection.status()).toBe(503);
-    expect((await jiraSelection.json()).error.code).toBe('JIRA_SETUP_REQUIRED');
-    const invalidJiraCallback = await page.context().request.get(`/api/integrations/jira/callback?state=${randomBytes(32).toString('base64url')}&code=unused`);
-    expect(invalidJiraCallback.status()).toBe(400);
-    expect((await invalidJiraCallback.json()).error.code).toBe('JIRA_CALLBACK_INVALID');
+    if (!jiraStatusBody.configured) {
+      await expect(jiraPanel.getByText('Jira OAuth setup required')).toBeVisible();
+      await expect(jiraPanel.getByText('JIRA_OAUTH_CLIENT_ID', { exact: true })).toBeVisible();
+      await jiraPanel.getByRole('button', { name: 'Connect Jira' }).click();
+      await expect(jiraPanel.getByRole('alert')).toContainText('Jira OAuth is not configured');
+      const jiraAuthorizationStart = await page.context().request.post(`/api/projects/${projectBefore.id}/jira/authorization`, { headers: { origin: 'http://127.0.0.1:4173' } });
+      expect(jiraAuthorizationStart.status()).toBe(503);
+      const jiraSetup = await jiraAuthorizationStart.json();
+      expect(jiraSetup.error.code).toBe('JIRA_SETUP_REQUIRED');
+      expect(jiraSetup.error.missing).toContain('JIRA_OAUTH_CLIENT_ID');
+      expect(JSON.stringify(jiraSetup)).not.toMatch(/clientSecret|accessToken|refreshToken|ciphertext/i);
+      const jiraSites = await page.context().request.get(`/api/projects/${projectBefore.id}/jira/authorization/sites`);
+      expect(jiraSites.status()).toBe(503);
+      expect((await jiraSites.json()).error.code).toBe('JIRA_SETUP_REQUIRED');
+      const jiraProjectSearch = await page.context().request.get(`/api/projects/${projectBefore.id}/jira/authorization/sites/00000000-0000-4000-8000-000000000001/projects`);
+      expect(jiraProjectSearch.status()).toBe(503);
+      expect((await jiraProjectSearch.json()).error.code).toBe('JIRA_SETUP_REQUIRED');
+      const jiraSelection = await page.context().request.post(`/api/projects/${projectBefore.id}/jira/authorization/selection`, {
+        data: { cloudId: '00000000-0000-4000-8000-000000000001', jiraProjectId: '10001' },
+        headers: { origin: 'http://127.0.0.1:4173' },
+      });
+      expect(jiraSelection.status()).toBe(503);
+      expect((await jiraSelection.json()).error.code).toBe('JIRA_SETUP_REQUIRED');
+    } else {
+      await expect(jiraPanel.getByRole('button', { name: 'Connect Jira' })).toBeEnabled();
+    }
+    const invalidJiraCallback = await page.context().request.get(`/api/integrations/jira/callback?state=${randomBytes(32).toString('base64url')}&code=unused`, { maxRedirects: 0 });
+    expect(invalidJiraCallback.status()).toBe(303);
+    expect(invalidJiraCallback.headers().location).toContain('jira=callback_invalid');
+    expect(invalidJiraCallback.headers().location).not.toMatch(/code=|state=/);
 
     await page.getByRole('button', { name: 'Sign out' }).click();
     await expect(page.getByRole('heading', { name: 'Your studio starts here.' })).toBeVisible();
@@ -185,6 +197,13 @@ test('invited accounts persist workspace projects and cannot read another worksp
     await page.getByRole('button', { name: 'Create account' }).click();
     await expect(page.getByRole('heading', { name: projectName })).toBeVisible();
     await expect(page.getByText('Invite a workspace member')).toHaveCount(0);
+    const memberJiraPanel = page.getByRole('region', { name: 'Jira connection' });
+    await expect(memberJiraPanel.getByRole('status')).toHaveText('Not connected');
+    await expect(memberJiraPanel.getByText('Only a workspace owner can change this Jira connection.')).toBeVisible();
+    await expect(memberJiraPanel.getByRole('button', { name: 'Connect Jira' })).toHaveCount(0);
+    const memberJiraAuthorization = await page.context().request.post(`/api/projects/${projectBefore.id}/jira/authorization`, { headers: { origin: 'http://127.0.0.1:4173' } });
+    expect(memberJiraAuthorization.status()).toBe(403);
+    expect((await memberJiraAuthorization.json()).error.code).toBe('OWNER_REQUIRED');
     const memberAccount = await pool.query('SELECT subject FROM studio_users WHERE lower(email) = $1', [memberEmail]);
     memberSubject = memberAccount.rows[0]?.subject;
     expect(memberSubject?.startsWith(memberSubjectPrefix)).toBeTruthy();

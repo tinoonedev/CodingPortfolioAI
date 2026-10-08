@@ -5,6 +5,8 @@ import express from 'express';
 import { DUMMY_PASSWORD_HASH, hashPassword, validatePassword, verifyPassword } from './passwords.js';
 import { validateClientProject } from './config.js';
 import { validateGherkinRequirements } from '../src/domain/gherkinRequirements.js';
+import { openAiReadiness, validateAgentTaskInput } from '../src/domain/openaiReadiness.js';
+import { encryptOpenAiApiKey, isOpenAiCredentialUsable, isOpenAiModelAllowed, validateOpenAiApiKey } from './openaiCredentials.js';
 import {
   createWorkPlanDigest,
   createWorkPlanTaskIdempotencyKey,
@@ -110,7 +112,7 @@ function toRequirementRevision(row, currentBriefHash) {
   };
 }
 
-export function createWorkspaceApp({ config, pool, jiraOAuthConfig = { configured: false, missing: [], invalid: [] } }) {
+export function createWorkspaceApp({ config, pool, jiraOAuthConfig = { configured: false, missing: [], invalid: [] }, openAiConfig = { configured: false, missing: ['OPENAI_PROJECT_PROVIDER_CONFIGURATION', 'OPENAI_MODEL_ALLOWLIST', 'OPENAI_SPEND_POLICY'], invalid: [] } }) {
   const app = express();
 
   app.disable('x-powered-by');
@@ -964,6 +966,208 @@ export function createWorkspaceApp({ config, pool, jiraOAuthConfig = { configure
       return response.status(503).json({ error: { code: 'WORKSPACE_UNAVAILABLE', message: 'The work plan could not be validated against the current project revision.' } });
     } finally {
       client?.release();
+    }
+  });
+
+  app.get('/api/projects/:projectId/agents/openai/readiness', requireSession, async (request, response) => {
+    if (!UUID_PATTERN.test(request.params.projectId)) {
+      return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+    }
+    try {
+      const project = await pool.query(
+        `SELECT p.id, c.model, c.encrypted_credentials, c.credential_key_id, c.monthly_budget_usd, c.max_input_bytes, c.max_output_tokens
+         FROM studio_client_projects p LEFT JOIN studio_openai_project_configs c
+           ON c.project_id = p.id AND c.workspace_id = p.workspace_id
+         WHERE p.id = $1 AND p.workspace_id = $2`,
+        [request.params.projectId, request.workspaceSession.workspace_id],
+      );
+      if (!project.rows[0]) {
+        return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+      }
+      const storedConfigurationReady = Boolean(project.rows[0].model);
+      const projectModelAllowed = storedConfigurationReady && isOpenAiModelAllowed(openAiConfig.pricing, project.rows[0].model);
+      let projectCredentialValid = false;
+      if (storedConfigurationReady && openAiConfig.keyring && project.rows[0].encrypted_credentials?.keyId === project.rows[0].credential_key_id) {
+        projectCredentialValid = isOpenAiCredentialUsable(
+          project.rows[0].encrypted_credentials,
+          { workspaceId: request.workspaceSession.workspace_id, projectId: request.params.projectId },
+          openAiConfig.keyring,
+        );
+      }
+      const missing = [];
+      const invalid = [];
+      if (!storedConfigurationReady) missing.push('PROJECT_OPENAI_CONFIGURATION');
+      else if (openAiConfig.keyring && !projectCredentialValid) invalid.push('PROJECT_CREDENTIAL_UNAVAILABLE');
+      else if (!projectModelAllowed) invalid.push('PROJECT_MODEL_NOT_ALLOWED');
+      if ((openAiConfig.missing || []).includes('OPENAI_TOKEN_ENCRYPTION_KEYRING')) missing.push('SERVER_CREDENTIAL_ENCRYPTION');
+      if ((openAiConfig.invalid || []).includes('OPENAI_TOKEN_ENCRYPTION_KEYRING')) invalid.push('SERVER_CREDENTIAL_ENCRYPTION');
+      if ((openAiConfig.missing || []).includes('OPENAI_MODEL_PRICING_USD_PER_MILLION')) missing.push('OPENAI_MODEL_PRICING_USD_PER_MILLION');
+      if ((openAiConfig.invalid || []).includes('OPENAI_MODEL_PRICING_USD_PER_MILLION')) invalid.push('OPENAI_MODEL_PRICING_USD_PER_MILLION');
+      const status = !storedConfigurationReady ? 'not_configured' : !openAiConfig.configured ? 'server_setup_required' : !projectCredentialValid ? 'project_credential_invalid' : !projectModelAllowed ? 'project_model_not_allowed' : 'execution_unavailable';
+      return response.json({
+        provider: 'openai',
+        projectId: request.params.projectId,
+        status,
+        configured: openAiConfig.configured,
+        canConfigure: openAiConfig.configured === true,
+        projectConfigured: storedConfigurationReady,
+        projectConfigurationValid: storedConfigurationReady && projectCredentialValid && projectModelAllowed,
+        executionEnabled: false,
+        canStartRun: false,
+        missing,
+        invalid,
+        allowedModels: openAiConfig.allowedModels || [],
+        projectConfiguration: storedConfigurationReady ? {
+          model: project.rows[0].model,
+          monthlyBudgetUsd: Number(project.rows[0].monthly_budget_usd),
+          maxInputBytes: project.rows[0].max_input_bytes,
+          maxOutputTokens: project.rows[0].max_output_tokens,
+        } : null,
+      });
+    } catch {
+      return response.status(503).json({ error: { code: 'WORKSPACE_UNAVAILABLE', message: 'Provider readiness could not be checked.' } });
+    }
+  });
+
+  app.put('/api/projects/:projectId/agents/openai/configuration', requireSession, async (request, response) => {
+    if (!UUID_PATTERN.test(request.params.projectId)) return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+    if (request.workspaceSession.role !== 'owner') return response.status(403).json({ error: { code: 'OWNER_REQUIRED', message: 'Only a workspace owner can configure the project agent provider.' } });
+    const body = request.body;
+    const validFields = new Set(['apiKey', 'model', 'monthlyBudgetUsd', 'maxInputBytes', 'maxOutputTokens']);
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((field) => !validFields.has(field))) {
+      return response.status(400).json({ error: { code: 'INVALID_OPENAI_CONFIGURATION', message: 'Provide a project API key, allowed model, monthly budget, and request limits.' } });
+    }
+    const apiKey = validateOpenAiApiKey(body.apiKey);
+    const model = typeof body.model === 'string' ? body.model : '';
+    const monthlyBudgetUsd = body.monthlyBudgetUsd;
+    const maxInputBytes = body.maxInputBytes;
+    const maxOutputTokens = body.maxOutputTokens;
+    if (!apiKey.valid || !isOpenAiModelAllowed(openAiConfig.pricing, model) || !Number.isFinite(monthlyBudgetUsd) || monthlyBudgetUsd < 0.01 || monthlyBudgetUsd > 100000 || !Number.isInteger(maxInputBytes) || maxInputBytes < 1 || maxInputBytes > 1_000_000 || !Number.isInteger(maxOutputTokens) || maxOutputTokens < 1 || maxOutputTokens > 32000) {
+      return response.status(400).json({ error: { code: 'INVALID_OPENAI_CONFIGURATION', message: apiKey.valid ? 'Choose a server-allowed model and valid positive spend and request limits.' : apiKey.error } });
+    }
+    if (!openAiConfig.keyring || openAiConfig.invalid?.includes('OPENAI_TOKEN_ENCRYPTION_KEYRING')) {
+      return response.status(503).json({ error: { code: 'OPENAI_CREDENTIAL_STORAGE_UNAVAILABLE', message: 'Encrypted project credential storage is not configured on this server.' } });
+    }
+    let client;
+    try {
+      client = await pool.connect();
+      await client.query('BEGIN');
+      const project = await client.query('SELECT id FROM studio_client_projects WHERE id = $1 AND workspace_id = $2 FOR UPDATE', [request.params.projectId, request.workspaceSession.workspace_id]);
+      if (!project.rows[0]) {
+        await client.query('ROLLBACK');
+        return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+      }
+      const existingConfiguration = await client.query(
+        'SELECT settled_spend_usd, reserved_spend_usd FROM studio_openai_project_configs WHERE workspace_id = $1 AND project_id = $2 FOR UPDATE',
+        [request.workspaceSession.workspace_id, request.params.projectId],
+      );
+      if (existingConfiguration.rows[0] && Number(existingConfiguration.rows[0].settled_spend_usd) + Number(existingConfiguration.rows[0].reserved_spend_usd) > monthlyBudgetUsd) {
+        await client.query('ROLLBACK');
+        return response.status(409).json({ error: { code: 'BUDGET_BELOW_CURRENT_SPEND', message: 'The monthly budget cannot be set below this period’s settled and reserved spend.' } });
+      }
+      const encryptedCredentials = encryptOpenAiApiKey(apiKey.value, { workspaceId: request.workspaceSession.workspace_id, projectId: request.params.projectId }, openAiConfig.keyring);
+      await client.query(
+        `INSERT INTO studio_openai_project_configs (workspace_id, project_id, connected_by, encrypted_credentials, credential_key_id, model, monthly_budget_usd, max_input_bytes, max_output_tokens)
+         VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9)
+         ON CONFLICT (workspace_id, project_id) DO UPDATE SET connected_by = EXCLUDED.connected_by, encrypted_credentials = EXCLUDED.encrypted_credentials,
+         credential_key_id = EXCLUDED.credential_key_id, model = EXCLUDED.model, monthly_budget_usd = EXCLUDED.monthly_budget_usd,
+         max_input_bytes = EXCLUDED.max_input_bytes, max_output_tokens = EXCLUDED.max_output_tokens, updated_at = now()`,
+        [request.workspaceSession.workspace_id, request.params.projectId, request.workspaceSession.user_subject, JSON.stringify(encryptedCredentials), encryptedCredentials.keyId, model, monthlyBudgetUsd, maxInputBytes, maxOutputTokens],
+      );
+      await client.query(
+        `INSERT INTO studio_audit_events (workspace_id, actor_subject, action, entity_type, entity_id, metadata)
+         VALUES ($1, $2, 'openai.project_configuration_saved', 'client_project', $3, $4::jsonb)`,
+        [request.workspaceSession.workspace_id, request.workspaceSession.user_subject, request.params.projectId, JSON.stringify({ model, monthlyBudgetUsd, maxInputBytes, maxOutputTokens, credentialEncrypted: true, providerValidated: false, executionEnabled: false })],
+      );
+      await client.query('COMMIT');
+      return response.status(204).end();
+    } catch {
+      if (client) await client.query('ROLLBACK').catch(() => {});
+      return response.status(503).json({ error: { code: 'OPENAI_CONFIGURATION_UNAVAILABLE', message: 'The project provider configuration could not be saved. No provider request was sent.' } });
+    } finally {
+      client?.release();
+    }
+  });
+
+  app.post('/api/projects/:projectId/agents/runs', requireSession, async (request, response) => {
+    if (!UUID_PATTERN.test(request.params.projectId)) {
+      return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+    }
+    const input = validateAgentTaskInput(request.body);
+    if (!input.valid) {
+      return response.status(400).json({ error: { code: 'INVALID_AGENT_TASK', message: input.error } });
+    }
+    try {
+      const project = await pool.query(
+        `SELECT p.id, c.model, c.encrypted_credentials, c.credential_key_id, c.max_input_bytes
+         FROM studio_client_projects p LEFT JOIN studio_openai_project_configs c
+           ON c.project_id = p.id AND c.workspace_id = p.workspace_id
+         WHERE p.id = $1 AND p.workspace_id = $2`,
+        [request.params.projectId, request.workspaceSession.workspace_id],
+      );
+      if (!project.rows[0]) {
+        return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+      }
+      const configuredInputLimit = project.rows[0].max_input_bytes;
+      if (!Number.isInteger(configuredInputLimit) || configuredInputLimit < 1 || configuredInputLimit > 1_000_000) {
+        return response.status(503).json({
+          error: {
+            code: 'OPENAI_SETUP_REQUIRED',
+            message: 'OpenAI agent execution is unavailable because the project request limit is missing or invalid.',
+            missing: configuredInputLimit == null ? ['PROJECT_OPENAI_CONFIGURATION'] : [],
+            invalid: configuredInputLimit == null ? [] : ['PROJECT_REQUEST_LIMITS'],
+          },
+        });
+      }
+      const boundedInput = validateAgentTaskInput(request.body, { maxInputBytes: configuredInputLimit });
+      if (!boundedInput.valid && boundedInput.code === 'AGENT_INPUT_TOO_LARGE') {
+        return response.status(413).json({ error: { code: boundedInput.code, message: boundedInput.error } });
+      }
+      const safeReadiness = openAiReadiness(openAiConfig);
+      const missing = [...safeReadiness.missing];
+      const invalid = [...safeReadiness.invalid];
+      if ((openAiConfig.missing || []).includes('OPENAI_TOKEN_ENCRYPTION_KEYRING')) missing.push('SERVER_CREDENTIAL_ENCRYPTION');
+      if ((openAiConfig.invalid || []).includes('OPENAI_TOKEN_ENCRYPTION_KEYRING')) invalid.push('SERVER_CREDENTIAL_ENCRYPTION');
+      if (!project.rows[0].model) missing.unshift('PROJECT_OPENAI_CONFIGURATION');
+      else if (!isOpenAiModelAllowed(openAiConfig.pricing, project.rows[0].model)) invalid.push('PROJECT_MODEL_NOT_ALLOWED');
+      else if (openAiConfig.keyring && (project.rows[0].encrypted_credentials?.keyId !== project.rows[0].credential_key_id || !isOpenAiCredentialUsable(
+        project.rows[0].encrypted_credentials,
+        { workspaceId: request.workspaceSession.workspace_id, projectId: request.params.projectId },
+        openAiConfig.keyring,
+      ))) {
+        invalid.push('PROJECT_CREDENTIAL_UNAVAILABLE');
+      }
+      if (missing.length || invalid.length) {
+        return response.status(503).json({
+          error: {
+            code: 'OPENAI_SETUP_REQUIRED',
+            message: 'OpenAI agent execution is unavailable until project credentials, model allowlist, and spend controls are configured.',
+            missing,
+            invalid,
+          },
+        });
+      }
+      const readiness = openAiReadiness({ ...openAiConfig, executionEnabled: false, projectId: request.params.projectId });
+      if (!readiness.canStartRun) {
+        if (readiness.status === 'execution_unavailable') {
+          return response.status(503).json({
+            error: {
+              code: 'OPENAI_EXECUTION_UNAVAILABLE',
+              message: 'OpenAI settings are present, but execution is disabled on this server. No provider request was sent.',
+            },
+          });
+        }
+        return response.status(503).json({
+          error: {
+            code: 'OPENAI_SETUP_REQUIRED',
+            message: 'OpenAI agent execution is unavailable until project credentials, model allowlist, and spend controls are configured.',
+            missing: readiness.missing,
+            invalid: readiness.invalid,
+          },
+        });
+      }
+    } catch {
+      return response.status(503).json({ error: { code: 'WORKSPACE_UNAVAILABLE', message: 'The agent task could not be checked.' } });
     }
   });
 

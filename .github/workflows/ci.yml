@@ -47,4 +47,7 @@ jobs:
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: npm run test:smoke
+      - run: npm run test:smoke
+        env:
+          WORKSPACE_OPENAI_CONFIG_INTEGRATION: '1'
       - run: npm run test:sanity

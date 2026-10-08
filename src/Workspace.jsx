@@ -438,6 +438,98 @@ function RequirementsPanel({ project, canEdit }) {
   </section>;
 }
 
+function AgentProviderPanel({ project, canEdit }) {
+  const [readiness, setReadiness] = useState({ loading: true, data: null, error: '' });
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState('');
+  const [savingConfiguration, setSavingConfiguration] = useState(false);
+  const roles = ['product-manager', 'business-analyst', 'project-manager', 'qa-analyst'];
+
+  const load = useCallback(async () => {
+    setReadiness({ loading: true, data: null, error: '' });
+    try {
+      const data = await api(`/api/projects/${project.id}/agents/openai/readiness`);
+      setReadiness({ loading: false, data, error: '' });
+    } catch (error) {
+      setReadiness({ loading: false, data: null, error: error.message });
+    }
+  }, [project.id]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const start = async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    setBusy(true);
+    setFeedback('');
+    try {
+      await api(`/api/projects/${project.id}/agents/runs`, {
+        method: 'POST',
+        body: JSON.stringify({ role: form.get('role'), artifact: form.get('artifact') }),
+      });
+      setFeedback('The server did not confirm a provider run.');
+    } catch (error) {
+      setFeedback(error.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveConfiguration = async (event) => {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const apiKeyInput = formElement.elements.namedItem('apiKey');
+    const apiKey = String(form.get('apiKey') || '');
+    if (apiKeyInput) apiKeyInput.value = '';
+    setSavingConfiguration(true);
+    setFeedback('');
+    try {
+      await api(`/api/projects/${project.id}/agents/openai/configuration`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          apiKey,
+          model: form.get('model'),
+          monthlyBudgetUsd: Number(form.get('monthlyBudgetUsd')),
+          maxInputBytes: Number(form.get('maxInputBytes')),
+          maxOutputTokens: Number(form.get('maxOutputTokens')),
+        }),
+      });
+      formElement.reset();
+      setFeedback('Project credentials were encrypted and saved. Provider execution remains disabled; no OpenAI request was sent.');
+      await load();
+    } catch (error) {
+      setFeedback(error.message);
+    } finally {
+      setSavingConfiguration(false);
+    }
+  };
+
+  const configured = readiness.data?.canStartRun === true;
+  const projectConfigured = readiness.data?.projectConfigured === true;
+  const serverReady = readiness.data?.configured === true;
+  return <section className="agent-provider-panel" aria-labelledby="agent-provider-title">
+    <div className="jira-panel-heading"><div><p className="eyebrow">AGENT RUNTIME · OPENAI</p><h3 id="agent-provider-title">Project agent readiness</h3><p>Generation-only tasks. Agent outputs do not write to Jira, GitHub, or deployments.</p></div><span className="jira-status-chip" role="status">{readiness.loading ? 'Checking' : !projectConfigured ? 'Setup required' : !serverReady ? 'Server setup required' : readiness.data?.status === 'project_credential_invalid' ? 'Credential needs review' : readiness.data?.projectConfigurationValid === false ? 'Model needs review' : 'Configured · paused'}</span></div>
+    {readiness.error ? <p className="workspace-alert" role="alert">{readiness.error}</p> : readiness.data && !configured && <div className="jira-setup-notice"><b>OpenAI agent tasks are blocked.</b><p>{readiness.data.status === 'execution_unavailable' ? 'Project and server settings are saved, but this server has no enabled execution adapter.' : readiness.data.status === 'project_credential_invalid' ? 'The saved project credential cannot be verified with the current server encryption keyring. Re-save the credential after checking the keyring configuration.' : readiness.data.status === 'project_model_not_allowed' ? 'The saved project model is no longer in the server allowlist. Choose an allowed model and save the project settings again.' : readiness.data.status === 'server_setup_required' ? 'Project settings are saved, but server-side credential encryption or pricing is not fully configured.' : 'Configure project-scoped credentials and spend limits. Saving them will not contact OpenAI or enable agent runs.'}</p>{[...readiness.data.missing, ...readiness.data.invalid].length > 0 && <ul>{[...readiness.data.missing, ...readiness.data.invalid].map((setting) => <li key={setting}><code>{setting}</code></li>)}</ul>}</div>}
+    {canEdit && <form className="agent-task-form" onSubmit={saveConfiguration}>
+      <p className="eyebrow">PROJECT CREDENTIALS</p>
+      <label>OpenAI project API key<input name="apiKey" type="password" autoComplete="new-password" required minLength="23" maxLength="503" /></label>
+      <label>Allowed model<select name="model" required defaultValue=""> <option value="" disabled>Select a server-allowed model</option>{(readiness.data?.allowedModels || []).map((model) => <option key={model} value={model}>{model}</option>)}</select></label>
+      <div className="agent-limits-grid"><label>Monthly budget (USD)<input name="monthlyBudgetUsd" type="number" min="0.01" max="100000" step="0.01" defaultValue="10" required /></label><label>Input limit (bytes)<input name="maxInputBytes" type="number" min="1" max="1000000" step="1" defaultValue="20000" required /></label><label>Output limit (tokens)<input name="maxOutputTokens" type="number" min="1" max="32000" step="1" defaultValue="2000" required /></label></div>
+      <button className="button subtle-button" type="submit" disabled={savingConfiguration || readiness.loading || readiness.data?.canConfigure !== true || (readiness.data?.allowedModels || []).length === 0}>{savingConfiguration ? 'Encrypting and saving…' : 'Save encrypted project settings'}</button>
+      <small>Only workspace owners can save. This form stays disabled until server encryption and pricing are configured. The key is cleared before the request is sent and never returned by the server. Saving does not run an agent.</small>
+    </form>}
+    {!canEdit && <p className="jira-panel-muted">Only a workspace owner can configure this project’s agent provider.</p>}
+    {configured && <form className="agent-task-form" onSubmit={start}>
+      <label>Agent role<select name="role" defaultValue="business-analyst">{roles.map((role) => <option key={role} value={role}>{role.replaceAll('-', ' ')}</option>)}</select></label>
+      <label>Task input<textarea name="artifact" maxLength="60000" minLength="1" required rows="3" placeholder="Provide an approved brief or Gherkin requirements." /></label>
+      <button className="button primary-button" type="submit" disabled={busy}>{busy ? 'Checking…' : 'Start agent task'} <span>↗</span></button>
+    </form>}
+    {feedback && <p className="workspace-alert" role="alert">{feedback}</p>}
+    <button className="requirements-retry" type="button" onClick={load} disabled={readiness.loading}>Refresh provider status</button>
+  </section>;
+}
+
 function ProjectDetails({ project, canEdit, onSaveBrief, jiraCallback, onJiraCallbackHandled }) {
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -466,7 +558,8 @@ function ProjectDetails({ project, canEdit, onSaveBrief, jiraCallback, onJiraCal
     </section>
     {editing && <BriefEditor project={project} onCancel={() => setEditing(false)} onSave={saveBrief} busy={busy} error={error} />}
     <JiraConnectionPanel project={project} canEdit={canEdit} callbackResult={jiraCallback} onCallbackHandled={onJiraCallbackHandled} />
-    <RequirementsPanel key={project.id} project={project} canEdit={canEdit} />
+    <RequirementsPanel project={project} canEdit={canEdit} />
+    <AgentProviderPanel project={project} canEdit={canEdit} />
   </div>;
 }
 

@@ -81,6 +81,37 @@ test('owner saves Gherkin revisions, receives parser feedback, and sees brief ch
     expect(savedRevision.revision).toBe(1);
     expect(savedRevision.briefChanged).toBe(false);
 
+    const scenarioId = savedRevision.scenarios[0].id;
+    const validPlan = {
+      requirementRevisionId: savedRevision.id,
+      tasks: [
+        { id: 'api', title: 'Create requirements endpoint', ownerRole: 'backend-developer', scenarioIds: [scenarioId], dependsOn: [] },
+        { id: 'ui', title: 'Show requirements status', ownerRole: 'frontend-developer', scenarioIds: [scenarioId], dependsOn: ['api'] },
+      ],
+    };
+    const validatedPlan = await page.context().request.post(`/api/projects/${projectId}/jira-work-plan/validate`, {
+      data: { plan: validPlan },
+      headers: { origin: 'http://127.0.0.1:4173' },
+    });
+    expect(validatedPlan.status()).toBe(200);
+    const planResult = await validatedPlan.json();
+    expect(planResult.structurallyValid).toBe(true);
+    expect(planResult.qaReview).toBe('not_run');
+    expect(planResult.requirementRevisionId).toBe(savedRevision.id);
+    expect(planResult.tasks.map(({ id }) => id)).toEqual(['api', 'ui']);
+    expect(planResult.tasks.every(({ idempotencyKey }) => /^[0-9a-f]{64}$/.test(idempotencyKey))).toBe(true);
+    expect(planResult.approval).toBe('not_approved');
+    expect(planResult.jiraWrites).toBe('not_performed');
+
+    const cyclicPlan = structuredClone(validPlan);
+    cyclicPlan.tasks[0].dependsOn = ['ui'];
+    const invalidPlan = await page.context().request.post(`/api/projects/${projectId}/jira-work-plan/validate`, {
+      data: { plan: cyclicPlan },
+      headers: { origin: 'http://127.0.0.1:4173' },
+    });
+    expect(invalidPlan.status()).toBe(422);
+    expect((await invalidPlan.json()).issues.map(({ code }) => code)).toContain('DEPENDENCY_CYCLE');
+
     await editor.fill('Feature: Invalid requirements\n  Scenario: Missing a precondition\n    When the owner saves\n    Then Fieldwork returns an error');
     await page.getByRole('button', { name: 'Validate and save revision' }).click();
     await expect(page.getByRole('alert')).toContainText('needs an explicit given step');
@@ -95,6 +126,13 @@ test('owner saves Gherkin revisions, receives parser feedback, and sees brief ch
     await expect(page.getByText('PRIOR BRIEF', { exact: true })).toBeVisible();
     await page.locator('.requirements-history details summary').first().click();
     await expect(page.getByText('This revision was saved for a prior brief.')).toBeVisible();
+
+    const stalePlan = await page.context().request.post(`/api/projects/${projectId}/jira-work-plan/validate`, {
+      data: { plan: validPlan },
+      headers: { origin: 'http://127.0.0.1:4173' },
+    });
+    expect(stalePlan.status()).toBe(409);
+    expect((await stalePlan.json()).error.code).toBe('STALE_REQUIREMENTS');
 
     await editor.fill(validGherkin.replace('complete revision', 'second revision'));
     await page.getByRole('button', { name: 'Validate and save revision' }).click();

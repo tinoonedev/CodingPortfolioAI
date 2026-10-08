@@ -332,11 +332,15 @@ test('invited accounts persist workspace projects and cannot read another worksp
       });
       expect(rejected.status()).toBe(401);
     }
+    const sourceBlockedEmail = `fieldwork+other-${randomUUID()}@example.test`;
     const rateLimited = await page.context().request.post('/api/auth/login', {
-      data: { email: `fieldwork+other-${randomUUID()}@example.test`, password: 'incorrect-password-for-test' },
+      data: { email: sourceBlockedEmail, password: 'incorrect-password-for-test' },
       headers: { origin: 'http://127.0.0.1:4173' },
     });
     expect(rateLimited.status()).toBe(429);
+    const sourceBlockedEmailBucket = createHash('sha256').update(`email\0${sourceBlockedEmail}`).digest('hex');
+    const blockedBucket = await pool.query('SELECT 1 FROM studio_auth_rate_limits WHERE bucket_hash = $1', [sourceBlockedEmailBucket]);
+    expect(blockedBucket.rowCount).toBe(0);
   } finally {
     const account = await pool.query('SELECT subject FROM studio_users WHERE lower(email) = $1', [email]).catch(() => ({ rows: [] }));
     subject ||= account.rows[0]?.subject;

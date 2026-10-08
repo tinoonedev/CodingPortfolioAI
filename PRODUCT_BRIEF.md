@@ -176,7 +176,9 @@ This still demonstrates an agentic delivery team while making the automation cre
 ### Implementation status at this brief revision
 
 - The repository has a React/Vite interface, an authenticated local workspace backed by PostgreSQL, and a seeded Waypoint demo that is explicitly not a connected run.
+- Workspace owners can save structurally validated, versioned Gherkin requirements for a client brief. Revisions are stored in PostgreSQL, include stable scenario identifiers, and are marked as prior-brief revisions after the approved brief changes. The app does not claim that structural validation is a QA review.
 - Jira, Figma, GitHub, OpenAI provider execution, Playwright MCP orchestration, CI/CD control, and deployment are not wired into the browser product. Connector work must remain visibly blocked or not configured until implemented and verified against real services.
+- Gherkin requirements are currently authored by the workspace owner in the app. Automatic Business Analyst or Project Manager drafting, QA review comments, and Jira work-item creation remain future capabilities tracked in Jira.
 - The recommended stack and architecture below describe a target direction. They are not evidence that those services have been implemented or deployed.
 
 ## Portfolio evidence to produce

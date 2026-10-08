@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { DUMMY_PASSWORD_HASH, hashPassword, validatePassword, verifyPassword } from './passwords.js';
 import { validateClientProject } from './config.js';
+import { validateGherkinRequirements } from '../src/domain/gherkinRequirements.js';
 
 const SESSION_SECONDS = 60 * 60 * 12;
 const INVITE_SECONDS = 60 * 60 * 24;
@@ -63,6 +64,27 @@ function toProject(row) {
   };
 }
 
+function projectBriefHash(project) {
+  return sha256(JSON.stringify([
+    project.name,
+    project.client,
+    project.problem,
+    project.target_user,
+    project.success_signal,
+  ]));
+}
+
+function toRequirementRevision(row, currentBriefHash) {
+  return {
+    id: row.id,
+    revision: row.revision,
+    briefChanged: row.brief_hash.trim() !== currentBriefHash,
+    content: row.content,
+    scenarios: row.scenarios,
+    createdAt: row.created_at,
+  };
+}
+
 export function createWorkspaceApp({ config, pool }) {
   const app = express();
 
@@ -82,7 +104,7 @@ export function createWorkspaceApp({ config, pool }) {
     }
     next();
   });
-  app.use(express.json({ limit: '16kb', strict: true }));
+  app.use(express.json({ limit: '256kb', strict: true }));
 
   app.use('/api', (request, response, next) => {
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)) {
@@ -417,6 +439,58 @@ export function createWorkspaceApp({ config, pool }) {
     }
   });
 
+  app.put('/api/projects/:projectId', requireSession, async (request, response) => {
+    if (!UUID_PATTERN.test(request.params.projectId)) {
+      return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+    }
+    if (request.workspaceSession.role !== 'owner') {
+      return response.status(403).json({ error: { code: 'OWNER_REQUIRED', message: 'Only a workspace owner can edit a client brief.' } });
+    }
+    const validated = validateClientProject(request.body);
+    if (!validated.valid) {
+      return response.status(400).json({ error: { code: 'INVALID_PROJECT', message: validated.error } });
+    }
+
+    let client;
+    try {
+      client = await pool.connect();
+      await client.query('BEGIN');
+      const updated = await client.query(
+        `UPDATE studio_client_projects SET
+           name = $3, client = $4, problem = $5, target_user = $6, success_signal = $7,
+           brief_approved_at = now(), brief_approved_by = $8, updated_at = now()
+         WHERE id = $1 AND workspace_id = $2
+         RETURNING id, name, client, problem, target_user, success_signal, brief_approved_at, created_at`,
+        [
+          request.params.projectId,
+          request.workspaceSession.workspace_id,
+          validated.project.name,
+          validated.project.client,
+          validated.project.problem,
+          validated.project.targetUser,
+          validated.project.successSignal,
+          request.workspaceSession.user_subject,
+        ],
+      );
+      if (!updated.rows[0]) {
+        await client.query('ROLLBACK');
+        return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+      }
+      await client.query(
+        `INSERT INTO studio_audit_events (workspace_id, actor_subject, action, entity_type, entity_id)
+         VALUES ($1, $2, 'client_project.brief_updated', 'client_project', $3)`,
+        [request.workspaceSession.workspace_id, request.workspaceSession.user_subject, request.params.projectId],
+      );
+      await client.query('COMMIT');
+      return response.json({ project: toProject(updated.rows[0]) });
+    } catch {
+      if (client) await client.query('ROLLBACK').catch(() => {});
+      return response.status(503).json({ error: { code: 'WORKSPACE_UNAVAILABLE', message: 'The brief could not be saved. Try again after the workspace is available.' } });
+    } finally {
+      client?.release();
+    }
+  });
+
   app.get('/api/projects/:projectId', requireSession, async (request, response) => {
     if (!UUID_PATTERN.test(request.params.projectId)) {
       return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
@@ -433,6 +507,118 @@ export function createWorkspaceApp({ config, pool }) {
       return response.json({ project: toProject(result.rows[0]) });
     } catch {
       return response.status(503).json({ error: { code: 'WORKSPACE_UNAVAILABLE', message: 'The workspace service is temporarily unavailable.' } });
+    }
+  });
+
+  app.get('/api/projects/:projectId/requirements', requireSession, async (request, response) => {
+    if (!UUID_PATTERN.test(request.params.projectId)) {
+      return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+    }
+    let client;
+    try {
+      client = await pool.connect();
+      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+      const projectResult = await client.query(
+        `SELECT id, name, client, problem, target_user, success_signal
+         FROM studio_client_projects WHERE id = $1 AND workspace_id = $2`,
+        [request.params.projectId, request.workspaceSession.workspace_id],
+      );
+      if (!projectResult.rows[0]) {
+        await client.query('ROLLBACK');
+        return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+      }
+      const currentHash = projectBriefHash(projectResult.rows[0]);
+      const revisions = await client.query(
+        `SELECT id, revision, brief_hash, content, scenarios, created_at
+         FROM studio_project_requirement_revisions
+         WHERE project_id = $1 AND workspace_id = $2
+         ORDER BY revision DESC`,
+        [request.params.projectId, request.workspaceSession.workspace_id],
+      );
+      await client.query('COMMIT');
+      return response.json({
+        revisions: revisions.rows.map((row) => toRequirementRevision(row, currentHash)),
+        currentBriefHash: currentHash,
+      });
+    } catch {
+      if (client) await client.query('ROLLBACK').catch(() => {});
+      return response.status(503).json({ error: { code: 'WORKSPACE_UNAVAILABLE', message: 'Requirements are temporarily unavailable.' } });
+    } finally {
+      client?.release();
+    }
+  });
+
+  app.post('/api/projects/:projectId/requirements', requireSession, async (request, response) => {
+    if (!UUID_PATTERN.test(request.params.projectId)) {
+      return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+    }
+    if (request.workspaceSession.role !== 'owner') {
+      return response.status(403).json({ error: { code: 'OWNER_REQUIRED', message: 'Only a workspace owner can save project requirements.' } });
+    }
+    const content = request.body?.content;
+    const validation = validateGherkinRequirements(content);
+    if (!validation.valid) {
+      return response.status(400).json({
+        error: { code: 'INVALID_GHERKIN', message: 'Requirements need correction before they can be saved as reviewable.' },
+        issues: validation.issues,
+        reviewable: false,
+      });
+    }
+
+    let client;
+    try {
+      client = await pool.connect();
+      await client.query('BEGIN');
+      const projectResult = await client.query(
+        `SELECT id, name, client, problem, target_user, success_signal
+         FROM studio_client_projects WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
+        [request.params.projectId, request.workspaceSession.workspace_id],
+      );
+      if (!projectResult.rows[0]) {
+        await client.query('ROLLBACK');
+        return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+      }
+      const project = projectResult.rows[0];
+      const currentBriefHash = projectBriefHash(project);
+      const nextRevision = await client.query(
+        `SELECT COALESCE(MAX(revision), 0) + 1 AS revision
+         FROM studio_project_requirement_revisions WHERE workspace_id = $1 AND project_id = $2`,
+        [request.workspaceSession.workspace_id, request.params.projectId],
+      );
+      const id = randomUUID();
+      const inserted = await client.query(
+        `INSERT INTO studio_project_requirement_revisions
+           (id, workspace_id, project_id, revision, brief_hash, content, scenarios, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+         RETURNING id, revision, brief_hash, content, scenarios, created_at`,
+        [
+          id,
+          request.workspaceSession.workspace_id,
+          request.params.projectId,
+          nextRevision.rows[0].revision,
+          currentBriefHash,
+          content,
+          JSON.stringify(validation.scenarios),
+          request.workspaceSession.user_subject,
+        ],
+      );
+      await client.query(
+        `INSERT INTO studio_audit_events (workspace_id, actor_subject, action, entity_type, entity_id, metadata)
+         VALUES ($1, $2, 'client_project.requirements_saved', 'requirements_revision', $3, $4::jsonb)`,
+        [
+          request.workspaceSession.workspace_id,
+          request.workspaceSession.user_subject,
+          id,
+          JSON.stringify({ revision: inserted.rows[0].revision, scenarioCount: validation.scenarios.length }),
+        ],
+      );
+      await client.query('COMMIT');
+      return response.status(201).json({ revision: toRequirementRevision(inserted.rows[0], currentBriefHash) });
+    } catch {
+      if (client) await client.query('ROLLBACK').catch(() => {});
+      return response.status(503).json({ error: { code: 'WORKSPACE_UNAVAILABLE', message: 'The requirements revision could not be saved.' } });
+    } finally {
+      client?.release();
     }
   });
 

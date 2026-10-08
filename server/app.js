@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { DUMMY_PASSWORD_HASH, hashPassword, validatePassword, verifyPassword } from './passwords.js';
+import { createPasswordVerificationGate } from './passwordVerificationGate.js';
 import { validateClientProject } from './config.js';
 import { validateGherkinRequirements } from '../src/domain/gherkinRequirements.js';
 import { openAiReadiness, validateAgentTaskInput } from '../src/domain/openaiReadiness.js';
@@ -114,6 +115,7 @@ function toRequirementRevision(row, currentBriefHash) {
 
 export function createWorkspaceApp({ config, pool, jiraOAuthConfig = { configured: false, missing: [], invalid: [] }, openAiConfig = { configured: false, missing: ['OPENAI_PROJECT_PROVIDER_CONFIGURATION', 'OPENAI_MODEL_ALLOWLIST', 'OPENAI_SPEND_POLICY'], invalid: [] } }) {
   const app = express();
+  const passwordVerificationGate = createPasswordVerificationGate(4);
 
   app.disable('x-powered-by');
   app.set('trust proxy', config.trustProxyHops || false);
@@ -183,7 +185,7 @@ export function createWorkspaceApp({ config, pool, jiraOAuthConfig = { configure
     try {
       await pool.query('DELETE FROM studio_auth_rate_limits WHERE window_expires_at <= now()');
       const keys = loginAttemptKeys(request, email);
-      const results = await Promise.all(keys.map((key) => pool.query(
+      const incrementBucket = (key) => pool.query(
         `INSERT INTO studio_auth_rate_limits (bucket_hash, attempt_count, window_expires_at)
          VALUES ($1, 1, now() + interval '15 minutes')
          ON CONFLICT (bucket_hash) DO UPDATE SET
@@ -191,8 +193,11 @@ export function createWorkspaceApp({ config, pool, jiraOAuthConfig = { configure
            window_expires_at = CASE WHEN studio_auth_rate_limits.window_expires_at <= now() THEN now() + interval '15 minutes' ELSE studio_auth_rate_limits.window_expires_at END
          RETURNING attempt_count`,
         [key],
-      )));
-      return results.every((result) => result.rows[0].attempt_count <= 10);
+      );
+      const ipResult = await incrementBucket(keys[0]);
+      if (ipResult.rows[0].attempt_count > 10) return false;
+      const emailResult = await incrementBucket(keys[1]);
+      return emailResult.rows[0].attempt_count <= 10;
     } catch {
       return null;
     }
@@ -321,17 +326,21 @@ export function createWorkspaceApp({ config, pool, jiraOAuthConfig = { configure
     if (!EMAIL_PATTERN.test(email) || email.length > 254 || typeof password !== 'string' || password.length > 128) {
       return response.status(400).json({ error: { code: 'INVALID_CREDENTIALS', message: 'Email or password is incorrect.' } });
     }
-    const attemptAllowed = await allowLoginAttempt(request, email);
-    if (attemptAllowed === null) {
-      return response.status(503).json({ error: { code: 'SIGN_IN_UNAVAILABLE', message: 'Sign-in is temporarily unavailable.' } });
-    }
-    if (!attemptAllowed) {
+    const releasePasswordVerification = passwordVerificationGate.tryAcquire();
+    if (!releasePasswordVerification) {
       return response.status(429).json({ error: { code: 'LOGIN_RATE_LIMITED', message: 'Too many sign-in attempts. Try again in 15 minutes.' } });
     }
 
     let client;
     let sessionToken;
     try {
+      const attemptAllowed = await allowLoginAttempt(request, email);
+      if (attemptAllowed === null) {
+        return response.status(503).json({ error: { code: 'SIGN_IN_UNAVAILABLE', message: 'Sign-in is temporarily unavailable.' } });
+      }
+      if (!attemptAllowed) {
+        return response.status(429).json({ error: { code: 'LOGIN_RATE_LIMITED', message: 'Too many sign-in attempts. Try again in 15 minutes.' } });
+      }
       const result = await pool.query(
         `SELECT u.subject, u.display_name, u.password_hash, m.workspace_id, m.role
          FROM studio_users u
@@ -353,6 +362,7 @@ export function createWorkspaceApp({ config, pool, jiraOAuthConfig = { configure
       if (client) await client.query('ROLLBACK').catch(() => {});
       return response.status(503).json({ error: { code: 'SIGN_IN_UNAVAILABLE', message: 'Sign-in is temporarily unavailable. No session was created.' } });
     } finally {
+      releasePasswordVerification();
       client?.release();
     }
 

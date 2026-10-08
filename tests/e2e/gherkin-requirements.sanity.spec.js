@@ -92,7 +92,7 @@ test('owner saves Gherkin revisions, receives parser feedback, and sees brief ch
     await page.getByLabel('Business problem').fill('The owner needs versioned requirements and change history.');
     await page.getByLabel('I approve this updated brief.').check();
     await page.getByRole('button', { name: 'Save approved brief' }).click();
-    await expect(page.getByText('PRIOR BRIEF')).toBeVisible();
+    await expect(page.getByText('PRIOR BRIEF', { exact: true })).toBeVisible();
     await page.locator('.requirements-history details summary').first().click();
     await expect(page.getByText('This revision was saved for a prior brief.')).toBeVisible();
 

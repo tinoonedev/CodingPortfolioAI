@@ -4,22 +4,37 @@ import { resolveWorkspaceProjectListView } from './domain/workspaceProjectList.j
 const emptyBrief = { name: '', client: '', problem: '', targetUser: '', successSignal: '', approved: false };
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    credentials: 'same-origin',
-    ...options,
-    headers: {
-      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-      ...options.headers,
-    },
-  });
+  let response;
+  try {
+    response = await fetch(path, {
+      credentials: 'same-origin',
+      ...options,
+      headers: {
+        ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+        ...options.headers,
+      },
+    });
+  } catch (cause) {
+    const error = new Error('The connection ended before Fieldwork could confirm the result. Check saved projects before retrying.');
+    error.outcomeUnknown = true;
+    error.cause = cause;
+    throw error;
+  }
   const body = response.status === 204 ? null : await response.json().catch(() => null);
+  if (response.ok && options.method === 'POST' && path === '/api/projects' && body === null) {
+    const error = new Error('The server response could not be read, so the result is unconfirmed. Check saved projects before retrying.');
+    error.outcomeUnknown = true;
+    throw error;
+  }
   if (!response.ok) {
     const error = new Error(body?.error?.message || 'The workspace request failed.');
     error.status = response.status;
     error.code = body?.error?.code;
+    error.field = body?.error?.field || null;
     error.missing = body?.error?.missing || [];
     error.invalid = body?.error?.invalid || [];
     error.issues = body?.issues || [];
+    error.outcomeUnknown = response.status >= 500 || response.status === 408;
     throw error;
   }
   return body;
@@ -327,27 +342,56 @@ function WorkspaceInvitation() {
   </details>;
 }
 
-function ProjectForm({ onCreate, onCancel, busy, error }) {
+function ProjectForm({ onCreate, onCheckSaved, onCancel, onClearError, busy, error }) {
   const [form, setForm] = useState(emptyBrief);
-  const update = (field) => (event) => setForm((current) => ({ ...current, [field]: event.target.value }));
+  const [creationRequestId, setCreationRequestId] = useState(() => window.crypto.randomUUID());
+  const [checkingSaved, setCheckingSaved] = useState(false);
+  const [reconcileStatus, setReconcileStatus] = useState('');
+  const update = (field) => (event) => {
+    setForm((current) => ({ ...current, [field]: event.target.value }));
+    setCreationRequestId(window.crypto.randomUUID());
+    setReconcileStatus('');
+    onClearError();
+  };
+  const fieldError = (field) => error?.field === field ? error.message : '';
+  const fieldErrorId = (field) => `brief-${field}-error`;
   const submit = async (event) => {
     event.preventDefault();
-    const created = await onCreate(form);
-    if (created) setForm(emptyBrief);
+    const created = await onCreate(form, creationRequestId);
+    if (created) {
+      setForm(emptyBrief);
+      setCreationRequestId(window.crypto.randomUUID());
+      setReconcileStatus('');
+    }
+  };
+  const checkSavedProjects = async () => {
+    setCheckingSaved(true);
+    setReconcileStatus('Checking the saved project list…');
+    try {
+      const result = await onCheckSaved(creationRequestId);
+      setReconcileStatus(result === 'found'
+        ? 'The saved project was found and opened.'
+        : 'No project with this request was returned. You can safely retry this unchanged brief with the same request identifier.');
+    } catch {
+      setReconcileStatus('The saved project list is unavailable. Your brief remains in this form; no save success is confirmed.');
+    } finally {
+      setCheckingSaved(false);
+    }
   };
 
   return <form className="workspace-project-form" onSubmit={submit}>
     <div className="workspace-form-heading"><span className="workspace-icon form-icon">＋</span><div><p className="eyebrow">NEW CLIENT PROJECT</p><h2>Start with the brief.</h2><p>Project details are stored in your authenticated workspace.</p></div></div>
     <div className="workspace-fields">
-      <label>Project name<input required maxLength="70" value={form.name} onChange={update('name')} placeholder="e.g. Waypoint" /></label>
-      <label>Client name<input required maxLength="70" value={form.client} onChange={update('client')} placeholder="e.g. Waypoint, Inc." /></label>
-      <label className="field-wide">Business problem<textarea required maxLength="500" rows="3" value={form.problem} onChange={update('problem')} placeholder="What outcome should the project create?" /></label>
-      <label>Target user<textarea required maxLength="250" rows="2" value={form.targetUser} onChange={update('targetUser')} placeholder="Who needs this?" /></label>
-      <label>Success signal<textarea required maxLength="250" rows="2" value={form.successSignal} onChange={update('successSignal')} placeholder="How will success be measured?" /></label>
+      <label htmlFor="brief-name">Project name<input id="brief-name" aria-invalid={fieldError('name') ? 'true' : undefined} aria-describedby={fieldError('name') ? fieldErrorId('name') : undefined} required maxLength="70" value={form.name} onChange={update('name')} placeholder="e.g. Waypoint" disabled={busy || checkingSaved || error?.outcomeUnknown} />{fieldError('name') && <small id={fieldErrorId('name')} className="workspace-field-error" role="alert">{fieldError('name')}</small>}</label>
+      <label htmlFor="brief-client">Client name<input id="brief-client" aria-invalid={fieldError('client') ? 'true' : undefined} aria-describedby={fieldError('client') ? fieldErrorId('client') : undefined} required maxLength="70" value={form.client} onChange={update('client')} placeholder="e.g. Waypoint, Inc." disabled={busy || checkingSaved || error?.outcomeUnknown} />{fieldError('client') && <small id={fieldErrorId('client')} className="workspace-field-error" role="alert">{fieldError('client')}</small>}</label>
+      <label className="field-wide" htmlFor="brief-problem">Business problem<textarea id="brief-problem" aria-invalid={fieldError('problem') ? 'true' : undefined} aria-describedby={fieldError('problem') ? fieldErrorId('problem') : undefined} required maxLength="500" rows="3" value={form.problem} onChange={update('problem')} placeholder="What outcome should the project create?" disabled={busy || checkingSaved || error?.outcomeUnknown} />{fieldError('problem') && <small id={fieldErrorId('problem')} className="workspace-field-error" role="alert">{fieldError('problem')}</small>}</label>
+      <label htmlFor="brief-target-user">Target user<textarea id="brief-target-user" aria-invalid={fieldError('targetUser') ? 'true' : undefined} aria-describedby={fieldError('targetUser') ? fieldErrorId('targetUser') : undefined} required maxLength="250" rows="2" value={form.targetUser} onChange={update('targetUser')} placeholder="Who needs this?" disabled={busy || checkingSaved || error?.outcomeUnknown} />{fieldError('targetUser') && <small id={fieldErrorId('targetUser')} className="workspace-field-error" role="alert">{fieldError('targetUser')}</small>}</label>
+      <label htmlFor="brief-success-signal">Success signal<textarea id="brief-success-signal" aria-invalid={fieldError('successSignal') ? 'true' : undefined} aria-describedby={fieldError('successSignal') ? fieldErrorId('successSignal') : undefined} required maxLength="250" rows="2" value={form.successSignal} onChange={update('successSignal')} placeholder="How will success be measured?" disabled={busy || checkingSaved || error?.outcomeUnknown} />{fieldError('successSignal') && <small id={fieldErrorId('successSignal')} className="workspace-field-error" role="alert">{fieldError('successSignal')}</small>}</label>
     </div>
-    <label className="workspace-brief-approval"><input required type="checkbox" checked={form.approved} onChange={(event) => setForm((current) => ({ ...current, approved: event.target.checked }))} /><span><b>I reviewed and approve this brief for the workspace.</b><small>This records my approval with my signed-in account and timestamp.</small></span></label>
-    {error && <p className="workspace-alert" role="alert">{error}</p>}
-    <div className="workspace-form-actions">{onCancel ? <button className="button subtle-button" type="button" onClick={onCancel} disabled={busy}>Back to Studio</button> : <span>Saving creates a server-side project record.</span>}<button className="button primary-button" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Create client project'} <span>↗</span></button></div>
+    <label className="workspace-brief-approval" htmlFor="brief-approved"><input id="brief-approved" aria-invalid={fieldError('approved') ? 'true' : undefined} aria-describedby={fieldError('approved') ? fieldErrorId('approved') : undefined} required type="checkbox" checked={form.approved} onChange={(event) => { setForm((current) => ({ ...current, approved: event.target.checked })); setCreationRequestId(window.crypto.randomUUID()); setReconcileStatus(''); onClearError(); }} disabled={busy || checkingSaved || error?.outcomeUnknown} /><span><b>I approve saving this client brief.</b><small>This records who approved this brief and when. It does not approve agent work, Jira changes, or release.</small>{fieldError('approved') && <small id={fieldErrorId('approved')} className="workspace-field-error" role="alert">{fieldError('approved')}</small>}</span></label>
+    {error && (!error.field || !fieldError(error.field)) && <p className="workspace-alert" role="alert">{error.message}</p>}
+    {reconcileStatus && <p className="workspace-inline-notice" role="status" aria-live="polite">{reconcileStatus}</p>}
+    <div className="workspace-form-actions">{onCancel ? <button className="button subtle-button" type="button" onClick={onCancel} disabled={busy || checkingSaved || error?.outcomeUnknown}>Back to Studio</button> : <span>Saving creates a server-side project record.</span>}{error?.outcomeUnknown && <button className="button subtle-button" type="button" onClick={checkSavedProjects} disabled={busy || checkingSaved}>{checkingSaved ? 'Checking saved projects…' : 'Check saved projects'}</button>}<button className="button primary-button" type="submit" disabled={busy || checkingSaved}>{busy ? 'Saving…' : error?.outcomeUnknown ? 'Retry this brief' : 'Create client project'} <span>↗</span></button></div>
   </form>;
 }
 
@@ -555,7 +599,7 @@ function ProjectDetails({ project, canEdit, onSaveBrief, jiraCallback, onJiraCal
         <article><small>TARGET USER</small><p>{project.targetUser}</p></article>
         <article><small>SUCCESS SIGNAL</small><p>{project.successSignal}</p></article>
       </div>
-      <div className="workspace-project-footer"><span>Created {new Date(project.createdAt).toLocaleDateString()}</span><span>Workspace access checked on every request</span>{canEdit && <button className="workspace-edit-brief" type="button" onClick={() => { setEditing(true); setError(''); }}>Edit approved brief</button>}</div>
+      <div className="workspace-project-footer"><span>Brief approved by {project.briefApprovedBy} · <time dateTime={project.briefApprovedAt}>{new Date(project.briefApprovedAt).toLocaleString()}</time></span><span>Created <time dateTime={project.createdAt}>{new Date(project.createdAt).toLocaleDateString()}</time> · Workspace access checked on every request</span>{canEdit && <button className="workspace-edit-brief" type="button" onClick={() => { setEditing(true); setError(''); }}>Edit approved brief</button>}</div>
     </section>
     {editing && <BriefEditor project={project} onCancel={() => setEditing(false)} onSave={saveBrief} busy={busy} error={error} />}
     <JiraConnectionPanel project={project} canEdit={canEdit} callbackResult={jiraCallback} onCallbackHandled={onJiraCallbackHandled} />
@@ -628,19 +672,28 @@ export default function Workspace() {
 
   useEffect(() => { load(); }, [load]);
 
-  const createProject = async (form) => {
+  const createProject = async (form, creationRequestId) => {
     setBusy(true);
     setFormError('');
     try {
-      const { project } = await api('/api/projects', { method: 'POST', body: JSON.stringify(form) });
+      const { project } = await api('/api/projects', { method: 'POST', body: JSON.stringify({ ...form, creationRequestId }) });
       setState((current) => ({ ...current, projects: [project, ...current.projects], selectedId: project.id, creatingProject: false }));
       return true;
     } catch (error) {
-      setFormError(error.message);
+      setFormError({ message: error.message, field: error.field, outcomeUnknown: error.code === 'PROJECT_OUTCOME_UNCONFIRMED' || error.outcomeUnknown });
       return false;
     } finally {
       setBusy(false);
     }
+  };
+
+  const checkSavedProject = async (creationRequestId) => {
+    const { projects } = await api('/api/projects');
+    const savedProject = projects.find((project) => project.creationRequestId === creationRequestId);
+    if (!savedProject) return 'not-found';
+    setState((current) => ({ ...current, projects, selectedId: savedProject.id, creatingProject: false }));
+    setFormError('');
+    return 'found';
   };
 
   const saveProjectBrief = async (projectId, form) => {
@@ -692,7 +745,7 @@ export default function Workspace() {
           {projectListView.kind === 'error' && <section className="studio-home-state studio-error-state" aria-labelledby="studio-project-error-title"><span className="studio-state-mark" aria-hidden="true">!</span><p className="eyebrow">PROJECT LIST UNAVAILABLE</p><h2 id="studio-project-error-title">Your projects could not be loaded.</h2><p>{state.projectListError}</p><button className="button primary-button" type="button" onClick={loadProjects}>Retry project list <span>↻</span></button></section>}
           {projectListView.kind === 'empty' && !state.creatingProject && <EmptyStudioState onCreate={() => setState((current) => ({ ...current, creatingProject: true }))} />}
           {projectListView.kind === 'projects' && !selectedProject && !state.creatingProject && <ProjectSelectionState onCreate={() => setState((current) => ({ ...current, creatingProject: true }))} />}
-          {state.creatingProject && <ProjectForm onCreate={createProject} onCancel={() => { setState((current) => ({ ...current, creatingProject: false })); setFormError(''); }} busy={busy} error={formError} />}
+          {state.creatingProject && <ProjectForm onCreate={createProject} onCheckSaved={checkSavedProject} onClearError={() => setFormError('')} onCancel={() => { setState((current) => ({ ...current, creatingProject: false })); setFormError(''); }} busy={busy} error={formError} />}
           {selectedProject && !state.creatingProject && <ProjectDetails key={selectedProject.id} project={selectedProject} canEdit={state.session.user.role === 'owner'} onSaveBrief={saveProjectBrief} jiraCallback={jiraReturn?.projectId === selectedProject.id && !handledJiraReturn.current ? jiraReturn : null} onJiraCallbackHandled={handleJiraCallbackHandled} />}
           {projectListView.kind === 'projects' && !state.creatingProject && <button className="workspace-add-project" type="button" onClick={() => setState((current) => ({ ...current, selectedId: null, creatingProject: true }))}>＋ Start another brief</button>}
         </div>

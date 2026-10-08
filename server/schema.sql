@@ -31,9 +31,14 @@ CREATE TABLE IF NOT EXISTS studio_client_projects (
   success_signal VARCHAR(250) NOT NULL,
   brief_approved_at TIMESTAMPTZ NOT NULL,
   brief_approved_by TEXT NOT NULL,
+  creation_request_id UUID,
+  creation_request_digest CHAR(64),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (workspace_id, id),
+  CONSTRAINT studio_client_projects_workspace_creation_request_unique UNIQUE (workspace_id, creation_request_id),
+  CONSTRAINT studio_client_projects_creation_request_pair_check
+    CHECK ((creation_request_id IS NULL) = (creation_request_digest IS NULL)),
   FOREIGN KEY (workspace_id, created_by)
     REFERENCES studio_workspace_members(workspace_id, user_subject),
   FOREIGN KEY (workspace_id, brief_approved_by)

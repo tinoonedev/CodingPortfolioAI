@@ -96,9 +96,71 @@ test('invited accounts persist workspace projects and cannot read another worksp
     await page.getByLabel('Business problem').fill('Verify real PostgreSQL-backed account persistence.');
     await page.getByLabel('Target user').fill('Workspace owner');
     await page.getByLabel('Success signal').fill('The project is restored after a new session.');
-    await page.getByLabel('I reviewed and approve this brief for the workspace.').check();
+    await page.getByLabel('I approve saving this client brief.').check();
+    const creationAuditBeforeInvalid = await pool.query(
+      `SELECT count(*) FROM studio_audit_events WHERE workspace_id = $1 AND action = 'client_project.created'`,
+      [workspaceId],
+    );
+    await page.getByLabel('Project name').fill('   ');
+    await page.getByRole('button', { name: 'Create client project' }).click();
+    const invalidProjectName = page.getByLabel('Project name');
+    await expect(invalidProjectName).toHaveAttribute('aria-invalid', 'true');
+    const fieldErrorId = await invalidProjectName.getAttribute('aria-describedby');
+    expect(fieldErrorId).toBeTruthy();
+    await expect(page.locator(`#${fieldErrorId}`)).toHaveAttribute('role', 'alert');
+    const creationAuditAfterInvalid = await pool.query(
+      `SELECT count(*) FROM studio_audit_events WHERE workspace_id = $1 AND action = 'client_project.created'`,
+      [workspaceId],
+    );
+    expect(creationAuditAfterInvalid.rows[0].count).toBe(creationAuditBeforeInvalid.rows[0].count);
+    await invalidProjectName.fill(projectName);
     await page.getByRole('button', { name: 'Create client project' }).click();
     await expect(page.getByRole('heading', { name: projectName })).toBeVisible();
+    const createdList = await page.context().request.get('/api/projects');
+    expect(createdList.ok()).toBeTruthy();
+    const createdProject = (await createdList.json()).projects.find((project) => project.name === projectName);
+    expect(createdProject?.creationRequestId).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(createdProject?.briefApprovedBy).toBe(displayName);
+    expect(createdProject?.briefApprovedAt).toBeTruthy();
+    const approvedTime = page.locator(`time[datetime="${createdProject.briefApprovedAt}"]`).first();
+    await expect(approvedTime).toBeVisible();
+    const creationAuditBeforeReplay = await pool.query(
+      `SELECT count(*) FROM studio_audit_events WHERE workspace_id = $1 AND entity_type = 'client_project' AND entity_id = $2 AND action = 'client_project.created'`,
+      [workspaceId, createdProject.id],
+    );
+    const exactReplay = await page.context().request.post('/api/projects', {
+      data: {
+        name: projectName,
+        client: 'Integration Client',
+        problem: 'Verify real PostgreSQL-backed account persistence.',
+        targetUser: 'Workspace owner',
+        successSignal: 'The project is restored after a new session.',
+        approved: true,
+        creationRequestId: createdProject.creationRequestId,
+      },
+      headers: { origin: 'http://127.0.0.1:4173' },
+    });
+    expect(exactReplay.status()).toBe(200);
+    expect((await exactReplay.json()).project.id).toBe(createdProject.id);
+    const changedReplay = await page.context().request.post('/api/projects', {
+      data: {
+        name: projectName,
+        client: 'Changed client',
+        problem: 'Verify real PostgreSQL-backed account persistence.',
+        targetUser: 'Workspace owner',
+        successSignal: 'The project is restored after a new session.',
+        approved: true,
+        creationRequestId: createdProject.creationRequestId,
+      },
+      headers: { origin: 'http://127.0.0.1:4173' },
+    });
+    expect(changedReplay.status()).toBe(409);
+    expect((await changedReplay.json()).error.code).toBe('CREATION_REQUEST_ID_REUSED');
+    const creationAuditAfterReplay = await pool.query(
+      `SELECT count(*) FROM studio_audit_events WHERE workspace_id = $1 AND entity_type = 'client_project' AND entity_id = $2 AND action = 'client_project.created'`,
+      [workspaceId, createdProject.id],
+    );
+    expect(creationAuditAfterReplay.rows[0].count).toBe(creationAuditBeforeReplay.rows[0].count);
     await page.reload();
     await expect(page.getByRole('heading', { name: 'Your studio, in motion.' })).toBeVisible();
     const projectChoice = page.getByRole('navigation', { name: 'Client projects' }).getByRole('button', { name: projectName });
@@ -118,6 +180,7 @@ test('invited accounts persist workspace projects and cannot read another worksp
     await page.keyboard.press('Space');
     await expect(projectChoice).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByRole('heading', { name: projectName, level: 2 })).toBeVisible();
+    await expect(page.getByText(`Brief approved by ${displayName}`)).toBeVisible();
     const jiraPanel = page.getByRole('region', { name: 'Jira connection' });
     await expect(jiraPanel).toBeVisible();
     await expect(jiraPanel.getByRole('status')).toHaveText('Not connected');

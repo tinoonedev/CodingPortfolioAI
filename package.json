@@ -18,6 +18,7 @@
     "test:e2e": "playwright test",
     "test:smoke": "playwright test --grep @smoke",
     "test:sanity": "playwright test --grep @sanity",
+    "jira:render-content": "node scripts/render-jira-content.mjs",
     "check:branch": "node scripts/check-branch-name.mjs",
     "check": "npm run check:branch && npm test && npm run build"
   },

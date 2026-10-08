@@ -116,6 +116,13 @@ test('invited accounts persist workspace projects and cannot read another worksp
     expect(projectsBefore.ok()).toBeTruthy();
     const projectBefore = (await projectsBefore.json()).projects.find((project) => project.name === projectName);
     expect(projectBefore).toBeTruthy();
+    const jiraStatus = await page.context().request.get(`/api/projects/${projectBefore.id}/jira/connection`);
+    expect(jiraStatus.ok()).toBeTruthy();
+    const jiraStatusBody = await jiraStatus.json();
+    expect(jiraStatusBody.status).toBe('not_connected');
+    expect(jiraStatusBody.configured).toBe(false);
+    expect(jiraStatusBody.connection).toBeNull();
+    expect(JSON.stringify(jiraStatusBody)).not.toMatch(/clientSecret|accessToken|refreshToken|ciphertext|private-client/i);
 
     await page.getByRole('button', { name: 'Sign out' }).click();
     await expect(page.getByRole('heading', { name: 'Your studio starts here.' })).toBeVisible();
@@ -186,6 +193,9 @@ test('invited accounts persist workspace projects and cannot read another worksp
     const foreignRead = await page.context().request.get(`/api/projects/${foreignProjectId}`);
     expect(foreignRead.status()).toBe(404);
     expect(await foreignRead.text()).not.toContain('Private Client');
+    const foreignJiraStatus = await page.context().request.get(`/api/projects/${foreignProjectId}/jira/connection`);
+    expect(foreignJiraStatus.status()).toBe(404);
+    expect(await foreignJiraStatus.text()).not.toContain('Private Client');
     const foreignPlanValidation = await page.context().request.post(`/api/projects/${foreignProjectId}/jira-work-plan/validate`, {
       data: { plan: {} },
       headers: { origin: 'http://127.0.0.1:4173' },

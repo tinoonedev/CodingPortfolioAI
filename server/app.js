@@ -6,6 +6,7 @@ import { DUMMY_PASSWORD_HASH, hashPassword, validatePassword, verifyPassword } f
 import { createPasswordVerificationGate } from './passwordVerificationGate.js';
 import { validateClientProject } from './config.js';
 import { validateGherkinRequirements } from '../src/domain/gherkinRequirements.js';
+import { mapProjectActivityEvent, mapProjectAgentRun } from '../src/domain/projectActivity.js';
 import { openAiReadiness, validateAgentTaskInput } from '../src/domain/openaiReadiness.js';
 import { encryptOpenAiApiKey, isOpenAiCredentialUsable, isOpenAiModelAllowed, validateOpenAiApiKey } from './openaiCredentials.js';
 import {
@@ -31,6 +32,16 @@ const SESSION_SECONDS = 60 * 60 * 12;
 const INVITE_SECONDS = 60 * 60 * 24;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PROJECT_ACTIVITY_ACTIONS = [
+  'client_project.created',
+  'client_project.brief_updated',
+  'client_project.requirements_saved',
+  'jira.authorization_started',
+  'jira.authorization_received',
+  'jira.project_connected',
+  'jira.connection_disconnected',
+  'openai.project_configuration_saved',
+];
 
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 
@@ -598,6 +609,51 @@ export function createWorkspaceApp({ config, pool, jiraOAuthConfig = { configure
       return response.json({ project: toProject(result.rows[0]) });
     } catch {
       return response.status(503).json({ error: { code: 'WORKSPACE_UNAVAILABLE', message: 'The workspace service is temporarily unavailable.' } });
+    }
+  });
+
+  app.get('/api/projects/:projectId/activity', requireSession, async (request, response) => {
+    if (!UUID_PATTERN.test(request.params.projectId)) {
+      return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+    }
+    try {
+      const project = await pool.query(
+        'SELECT id FROM studio_client_projects WHERE id = $1 AND workspace_id = $2',
+        [request.params.projectId, request.workspaceSession.workspace_id],
+      );
+      if (!project.rows[0]) {
+        return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+      }
+      const [audit, runs] = await Promise.all([
+        pool.query(
+          `SELECT e.id, e.action, e.created_at, actor.display_name
+           FROM studio_audit_events e
+           LEFT JOIN studio_users actor ON actor.subject = e.actor_subject
+           WHERE e.workspace_id = $1 AND (
+             (e.entity_type = 'client_project' AND e.entity_id = $2 AND e.action = ANY($3::text[]))
+             OR (e.entity_type = 'requirements_revision' AND e.action = 'client_project.requirements_saved'
+               AND EXISTS (
+                 SELECT 1 FROM studio_project_requirement_revisions revision
+                 WHERE revision.workspace_id = e.workspace_id AND revision.id::text = e.entity_id AND revision.project_id = $2::uuid
+               ))
+           )
+           ORDER BY e.created_at DESC, e.id DESC LIMIT 25`,
+          [request.workspaceSession.workspace_id, request.params.projectId, PROJECT_ACTIVITY_ACTIONS],
+        ),
+        pool.query(
+          `SELECT id, role, status, started_at, finished_at
+           FROM studio_agent_runs
+           WHERE workspace_id = $1 AND project_id = $2
+           ORDER BY started_at DESC LIMIT 25`,
+          [request.workspaceSession.workspace_id, request.params.projectId],
+        ),
+      ]);
+      return response.json({
+        events: audit.rows.map(mapProjectActivityEvent).filter(Boolean),
+        agentRuns: runs.rows.map(mapProjectAgentRun).filter(Boolean),
+      });
+    } catch {
+      return response.status(503).json({ error: { code: 'PROJECT_ACTIVITY_UNAVAILABLE', message: 'Project activity could not be loaded. Retry when the workspace is available.' } });
     }
   });
 

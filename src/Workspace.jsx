@@ -463,7 +463,7 @@ function RequirementsPanel({ project, canEdit }) {
     }
   };
 
-  return <section className="workspace-requirements" aria-labelledby="requirements-title">
+  return <section id={`project-requirements-${project.id}`} className="workspace-requirements" aria-labelledby="requirements-title">
     <div className="workspace-requirements-heading"><div><p className="eyebrow">BUSINESS ANALYST · GHERKIN</p><h3 id="requirements-title">Requirements revisions</h3><p>Versioned against this project brief. Structural validation does not replace QA review.</p></div><span className="requirements-count">{revisions.length} {revisions.length === 1 ? 'REVISION' : 'REVISIONS'}</span></div>
     {canEdit && <form className="requirements-editor" onSubmit={save}>
       <label htmlFor="gherkin-requirements-content">Gherkin feature</label>
@@ -575,6 +575,48 @@ function AgentProviderPanel({ project, canEdit }) {
   </section>;
 }
 
+function ProjectActivityPanel({ projectId }) {
+  const [state, setState] = useState({ status: 'loading', events: [], agentRuns: [], error: '' });
+  const load = useCallback(async () => {
+    setState((current) => ({ ...current, status: 'loading', events: [], agentRuns: [], error: '' }));
+    try {
+      const activity = await api(`/api/projects/${projectId}/activity`);
+      if (!Array.isArray(activity?.events) || !Array.isArray(activity?.agentRuns)) {
+        throw new Error('Project activity returned an invalid response. Retry activity.');
+      }
+      setState({ status: 'ready', events: activity.events, agentRuns: activity.agentRuns, error: '' });
+    } catch (error) {
+      setState({ status: 'error', events: [], agentRuns: [], error: error.message });
+    }
+  }, [projectId]);
+
+  useEffect(() => { load(); }, [load]);
+  const roleName = (role) => role.replaceAll('-', ' ');
+  return <section className="workspace-activity-panel" aria-labelledby="project-activity-title">
+    <div className="workspace-activity-heading"><div><p className="eyebrow">PERSISTED WORKSPACE EVENTS</p><h3 id="project-activity-title">Project activity</h3><p>Updates recorded for this client project.</p></div><button className="button subtle-button" type="button" onClick={load} disabled={state.status === 'loading'}>{state.status === 'loading' ? 'Refreshing…' : 'Refresh activity'}</button></div>
+    {state.status === 'loading' && <p className="workspace-activity-state" role="status">Loading project activity…</p>}
+    {state.status === 'error' && <div className="workspace-activity-error" role="alert"><p>{state.error}</p><button className="button subtle-button" type="button" onClick={load}>Retry activity</button></div>}
+    {state.status === 'ready' && <div className="workspace-activity-columns">
+      <section className="workspace-activity-list" aria-labelledby="project-events-title"><h4 id="project-events-title">Recent updates</h4>
+        {state.events.length === 0 ? <p className="workspace-activity-empty">No project activity events have been recorded.</p> : <ol>{state.events.map((event) => <li key={event.id}><span className={`workspace-activity-mark activity-${event.category}`} aria-hidden="true">{event.category === 'jira' ? '↗' : event.category === 'requirements' ? '≋' : event.category === 'agent-settings' ? '◇' : '•'}</span><div><b>{event.label}</b><small>{event.actorDisplayName}</small></div><time dateTime={event.occurredAt}>{new Date(event.occurredAt).toLocaleString()}</time></li>)}</ol>}
+      </section>
+      <section className="workspace-agent-activity" aria-labelledby="agent-activity-title"><h4 id="agent-activity-title">Agent runs</h4>
+        {state.agentRuns.length === 0 ? <p>No agent runs have been recorded for this project. No agents are shown as active.</p> : <ol>{state.agentRuns.map((run) => <li key={run.id}><span><b>{roleName(run.role)}</b><small>{run.status}</small></span><time dateTime={run.startedAt}>{new Date(run.startedAt).toLocaleString()}</time></li>)}</ol>}
+      </section>
+    </div>}
+  </section>;
+}
+
+function ProjectRoomOverview({ project }) {
+  return <section className="workspace-room-overview" aria-labelledby="project-room-overview-title">
+    <div><p className="eyebrow">DELIVERY ROOM · PERSISTED PROJECT</p><h3 id="project-room-overview-title">Project overview</h3><p>Current project details and recorded updates, with external work shown only when Fieldwork verifies its source.</p></div>
+    <div className="workspace-room-cards">
+      <article className="workspace-room-card"><span className="workspace-room-icon" aria-hidden="true">⌁</span><div><b>Design handoff</b><span className="workspace-room-status">Figma not connected</span><p>Design files and approval states are unavailable until a real project connection is configured.</p></div></article>
+      <article className="workspace-room-card workspace-room-next"><span className="workspace-room-icon" aria-hidden="true">→</span><div><b>Available next action</b><span className="workspace-room-status">Review project requirements</span><p>Open the authenticated Gherkin requirements workspace for this project.</p><a className="button subtle-button" href={`#project-requirements-${project.id}`}>Open requirements <span>↗</span></a></div></article>
+    </div>
+  </section>;
+}
+
 function ProjectDetails({ project, canEdit, onSaveBrief, jiraCallback, onJiraCallbackHandled }) {
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -592,6 +634,7 @@ function ProjectDetails({ project, canEdit, onSaveBrief, jiraCallback, onJiraCal
     }
   };
   return <div className="workspace-project-stack">
+    <ProjectRoomOverview project={project} />
     <section className="workspace-project-detail" aria-labelledby="active-project-title">
       <div className="workspace-project-heading"><span className="workspace-project-avatar">{project.name.slice(0, 1).toUpperCase()}</span><div><p className="eyebrow">CLIENT PROJECT · SERVER SAVED</p><h2 id="active-project-title">{project.name}</h2><p>{project.client}</p></div><span className="workspace-saved"><i /> Approved · Persisted</span></div>
       <div className="workspace-brief-grid">
@@ -603,6 +646,7 @@ function ProjectDetails({ project, canEdit, onSaveBrief, jiraCallback, onJiraCal
     </section>
     {editing && <BriefEditor project={project} onCancel={() => setEditing(false)} onSave={saveBrief} busy={busy} error={error} />}
     <JiraConnectionPanel project={project} canEdit={canEdit} callbackResult={jiraCallback} onCallbackHandled={onJiraCallbackHandled} />
+    <ProjectActivityPanel key={`activity-${project.id}`} projectId={project.id} />
     <RequirementsPanel project={project} canEdit={canEdit} />
     <AgentProviderPanel project={project} canEdit={canEdit} />
   </div>;

@@ -122,6 +122,21 @@ test('invited accounts persist workspace projects and cannot read another worksp
     expect(createdProject?.creationRequestId).toMatch(/^[0-9a-f-]{36}$/i);
     expect(createdProject?.briefApprovedBy).toBe(displayName);
     expect(createdProject?.briefApprovedAt).toBeTruthy();
+    const projectActivity = await page.context().request.get(`/api/projects/${createdProject.id}/activity`);
+    expect(projectActivity.status()).toBe(200);
+    const projectActivityBody = await projectActivity.json();
+    const createdAccount = await pool.query('SELECT subject FROM studio_users WHERE lower(email) = $1', [email]);
+    expect(createdAccount.rowCount).toBe(1);
+    subject = createdAccount.rows[0].subject;
+    expect(projectActivityBody.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: 'Client project created', actorDisplayName: displayName }),
+    ]));
+    expect(projectActivityBody.events.every((event) => typeof event.occurredAt === 'string')).toBe(true);
+    expect(projectActivityBody.agentRuns).toEqual([]);
+    const serializedActivity = JSON.stringify(projectActivityBody);
+    expect(serializedActivity).not.toContain(email);
+    expect(serializedActivity).not.toContain(subject);
+    expect(serializedActivity).not.toMatch(/metadata|credential|ciphertext/i);
     const approvedTime = page.locator(`time[datetime="${createdProject.briefApprovedAt}"]`).first();
     await expect(approvedTime).toBeVisible();
     const creationAuditBeforeReplay = await pool.query(
@@ -181,6 +196,10 @@ test('invited accounts persist workspace projects and cannot read another worksp
     await expect(projectChoice).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByRole('heading', { name: projectName, level: 2 })).toBeVisible();
     await expect(page.getByText(`Brief approved by ${displayName}`)).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Project overview' })).toBeVisible();
+    await expect(page.getByText('Figma not connected')).toBeVisible();
+    await expect(page.getByText('No agent runs have been recorded for this project. No agents are shown as active.')).toBeVisible();
+    await expect(page.getByText('Client project created')).toBeVisible();
     const jiraPanel = page.getByRole('region', { name: 'Jira connection' });
     await expect(jiraPanel).toBeVisible();
     await expect(jiraPanel.getByRole('status')).toHaveText('Not connected');
@@ -389,6 +408,9 @@ test('invited accounts persist workspace projects and cannot read another worksp
     const foreignRead = await page.context().request.get(`/api/projects/${foreignProjectId}`);
     expect(foreignRead.status()).toBe(404);
     expect(await foreignRead.text()).not.toContain('Private Client');
+    const foreignActivity = await page.context().request.get(`/api/projects/${foreignProjectId}/activity`);
+    expect(foreignActivity.status()).toBe(404);
+    expect(await foreignActivity.text()).not.toContain('Private Client');
     const foreignJiraStatus = await page.context().request.get(`/api/projects/${foreignProjectId}/jira/connection`);
     expect(foreignJiraStatus.status()).toBe(404);
     expect(await foreignJiraStatus.text()).not.toContain('Private Client');

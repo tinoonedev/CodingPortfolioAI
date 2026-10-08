@@ -5,6 +5,12 @@ import express from 'express';
 import { DUMMY_PASSWORD_HASH, hashPassword, validatePassword, verifyPassword } from './passwords.js';
 import { validateClientProject } from './config.js';
 import { validateGherkinRequirements } from '../src/domain/gherkinRequirements.js';
+import {
+  createWorkPlanDigest,
+  createWorkPlanTaskIdempotencyKey,
+  orderWorkPlanTasks,
+  validateJiraWorkPlan,
+} from '../src/domain/jiraWorkPlan.js';
 
 const SESSION_SECONDS = 60 * 60 * 12;
 const INVITE_SECONDS = 60 * 60 * 24;
@@ -617,6 +623,86 @@ export function createWorkspaceApp({ config, pool }) {
     } catch {
       if (client) await client.query('ROLLBACK').catch(() => {});
       return response.status(503).json({ error: { code: 'WORKSPACE_UNAVAILABLE', message: 'The requirements revision could not be saved.' } });
+    } finally {
+      client?.release();
+    }
+  });
+
+  app.post('/api/projects/:projectId/jira-work-plan/validate', requireSession, async (request, response) => {
+    if (!UUID_PATTERN.test(request.params.projectId)) {
+      return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+    }
+    let client;
+    try {
+      client = await pool.connect();
+      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+      const projectResult = await client.query(
+        `SELECT id, name, client, problem, target_user, success_signal
+         FROM studio_client_projects WHERE id = $1 AND workspace_id = $2`,
+        [request.params.projectId, request.workspaceSession.workspace_id],
+      );
+      if (!projectResult.rows[0]) {
+        await client.query('ROLLBACK');
+        return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+      }
+
+      const revisions = await client.query(
+        `SELECT id, revision, brief_hash, content, scenarios
+         FROM studio_project_requirement_revisions
+         WHERE project_id = $1 AND workspace_id = $2
+         ORDER BY revision DESC LIMIT 1`,
+        [request.params.projectId, request.workspaceSession.workspace_id],
+      );
+      const latest = revisions.rows[0];
+      if (!latest) {
+        await client.query('ROLLBACK');
+        return response.status(409).json({ error: { code: 'REQUIREMENTS_REQUIRED', message: 'Save reviewable Gherkin requirements before validating a work plan.' } });
+      }
+
+      const briefRevisionId = projectBriefHash(projectResult.rows[0]);
+      if (latest.brief_hash.trim() !== briefRevisionId) {
+        await client.query('ROLLBACK');
+        return response.status(409).json({ error: { code: 'STALE_REQUIREMENTS', message: 'The saved Gherkin belongs to an earlier brief. Save a new requirements revision before planning Jira work.' } });
+      }
+
+      const requirementRevision = { id: latest.id, revision: latest.revision, scenarios: latest.scenarios };
+      const validation = validateJiraWorkPlan(request.body?.plan, requirementRevision);
+      if (!validation.valid) {
+        await client.query('ROLLBACK');
+        return response.status(422).json({
+          error: { code: 'INVALID_WORK_PLAN', message: 'The work plan must cover the current Gherkin revision and contain a valid dependency graph.' },
+          issues: validation.issues,
+          structurallyValid: false,
+        });
+      }
+
+      const planDigest = createWorkPlanDigest(request.body.plan, {
+        briefRevisionId,
+        requirementRevisionId: latest.id,
+        requirementContent: latest.content,
+      });
+      const tasks = orderWorkPlanTasks(request.body.plan.tasks).map((task) => ({
+        id: task.id,
+        title: task.title,
+        ownerRole: task.ownerRole,
+        scenarioIds: task.scenarioIds,
+        dependsOn: task.dependsOn,
+        idempotencyKey: createWorkPlanTaskIdempotencyKey(planDigest, task.id),
+      }));
+      await client.query('COMMIT');
+      return response.json({
+        structurallyValid: true,
+        qaReview: 'not_run',
+        requirementRevisionId: latest.id,
+        requirementRevision: latest.revision,
+        planDigest,
+        tasks,
+        approval: 'not_approved',
+        jiraWrites: 'not_performed',
+      });
+    } catch {
+      if (client) await client.query('ROLLBACK').catch(() => {});
+      return response.status(503).json({ error: { code: 'WORKSPACE_UNAVAILABLE', message: 'The work plan could not be validated against the current project revision.' } });
     } finally {
       client?.release();
     }

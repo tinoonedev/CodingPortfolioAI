@@ -186,6 +186,12 @@ test('invited accounts persist workspace projects and cannot read another worksp
     const foreignRead = await page.context().request.get(`/api/projects/${foreignProjectId}`);
     expect(foreignRead.status()).toBe(404);
     expect(await foreignRead.text()).not.toContain('Private Client');
+    const foreignPlanValidation = await page.context().request.post(`/api/projects/${foreignProjectId}/jira-work-plan/validate`, {
+      data: { plan: {} },
+      headers: { origin: 'http://127.0.0.1:4173' },
+    });
+    expect(foreignPlanValidation.status()).toBe(404);
+    expect(await foreignPlanValidation.text()).not.toContain('Private Client');
 
     await pool.query('DELETE FROM studio_auth_rate_limits');
     const limitedEmail = `fieldwork+limit-${randomUUID()}@example.test`;

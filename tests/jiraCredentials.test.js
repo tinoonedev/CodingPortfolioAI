@@ -7,6 +7,8 @@ import {
   encryptJiraTokenBundle,
   readJiraOAuthConfig,
   reencryptJiraTokenBundle,
+  sanitizeJiraProjectSummary,
+  validateAccessibleJiraSite,
 } from '../server/jiraCredentials.js';
 
 const context = { workspaceId: 'workspace-a', projectId: 'project-a' };
@@ -62,7 +64,6 @@ test('rejects invalid redirect, malformed keyring, and unexpected token fields',
   assert.throws(() => encryptJiraTokenBundle({ ...bundle, expiresAt: 123 }, context, makeKeyring('key-1', { 'key-1': keyA })), /expiry/);
 });
 
-
 test('builds the official Atlassian authorization URL with only the approved scopes', () => {
   const state = randomBytes(32).toString('base64url');
   const url = new URL(buildJiraAuthorizationUrl({
@@ -80,4 +81,31 @@ test('builds the official Atlassian authorization URL with only the approved sco
   assert.equal(url.searchParams.get('prompt'), 'consent');
   assert.deepEqual(url.searchParams.get('scope').split(' '), ['read:jira-work', 'write:jira-work', 'offline_access']);
   assert.throws(() => buildJiraAuthorizationUrl({ clientId: 'id', redirectUri: 'https://fieldwork.example/callback', state: 'predictable' }), /Valid Jira OAuth/);
+});
+
+test('filters Jira accessible sites to safe HTTPS Atlassian origins and required scopes', () => {
+  const site = {
+    id: '1324a887-45db-1bf4-1e99-ef0ff456d421',
+    name: 'Client Jira',
+    url: 'https://client.atlassian.net/',
+    scopes: ['read:jira-work', 'write:jira-work', 'offline_access'],
+    avatarUrl: 'https://external.example/avatar.svg',
+  };
+  assert.deepEqual(validateAccessibleJiraSite(site), {
+    id: site.id,
+    name: 'Client Jira',
+    url: 'https://client.atlassian.net',
+    scopes: ['read:jira-work', 'write:jira-work', 'offline_access'],
+  });
+  assert.equal(validateAccessibleJiraSite({ ...site, url: 'http://client.atlassian.net/' }), null);
+  assert.equal(validateAccessibleJiraSite({ ...site, url: 'https://attacker.example/' }), null);
+  assert.equal(validateAccessibleJiraSite({ ...site, scopes: ['write:jira-work'] }), null);
+});
+
+test('sanitizes Jira project summaries and rejects malformed identifiers', () => {
+  assert.deepEqual(sanitizeJiraProjectSummary({ id: 10001, key: 'CLIENT_APP', name: 'Client App', self: 'https://ignored.example' }), {
+    id: '10001', key: 'CLIENT_APP', name: 'Client App',
+  });
+  assert.equal(sanitizeJiraProjectSummary({ id: 'not-numeric', key: 'client', name: 'Client' }), null);
+  assert.equal(sanitizeJiraProjectSummary({ id: '10002', key: 'BAD-KEY', name: 'Client' }), null);
 });

@@ -403,3 +403,181 @@ export async function purgeExpiredJiraOAuthData(pool) {
   await pool.query('DELETE FROM studio_jira_oauth_transactions WHERE expires_at <= now()');
   await pool.query('DELETE FROM studio_jira_pending_authorizations WHERE expires_at <= now()');
 }
+
+const JIRA_ACCESSIBLE_RESOURCES_ENDPOINT = 'https://api.atlassian.com/oauth/token/accessible-resources';
+const JIRA_API_BASE = 'https://api.atlassian.com/ex/jira';
+const CLOUD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const JIRA_PROJECT_ID_PATTERN = /^\d{1,20}$/;
+const JIRA_PROJECT_KEY_PATTERN = /^[A-Z][A-Z0-9_]{0,49}$/;
+
+async function requestAtlassianJson(url, accessToken) {
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'GET',
+      redirect: 'error',
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch {
+    throw new Error('The Atlassian Jira API is unavailable.');
+  }
+  if (!response.ok) throw new Error('The Atlassian Jira API rejected this request.');
+  if (!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type') || '')) {
+    throw new Error('The Atlassian Jira API returned an invalid response.');
+  }
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('The Atlassian Jira API returned an invalid response.');
+  const chunks = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > 524_288) {
+        await reader.cancel();
+        throw new Error('The Atlassian Jira API response exceeded the allowed size.');
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } catch {
+    throw new Error('The Atlassian Jira API returned an invalid response.');
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch {
+    throw new Error('The Atlassian Jira API returned an invalid response.');
+  }
+}
+
+async function pendingAuthorization(pool, context, keyring) {
+  const { workspaceId, projectId, userSubject, sessionTokenHash } = context || {};
+  if (![workspaceId, projectId, userSubject, sessionTokenHash].every((value) => typeof value === 'string' && value.trim())) {
+    throw new TypeError('An authenticated owner session and project scope are required.');
+  }
+  const result = await pool.query(
+    `SELECT encrypted_credentials, credential_key_id, granted_scopes, expires_at
+     FROM studio_jira_pending_authorizations
+     WHERE workspace_id = $1 AND project_id = $2 AND user_subject = $3 AND session_token_hash = $4 AND expires_at > now()`,
+    [workspaceId, projectId, userSubject, sessionTokenHash],
+  );
+  const row = result.rows[0];
+  if (!row) throw new Error('The Jira authorization is missing or expired.');
+  const tokenBundle = decryptJiraTokenBundle(row.encrypted_credentials, { workspaceId, projectId }, keyring);
+  const storedScopes = Array.isArray(row.granted_scopes) ? [...row.granted_scopes].sort() : [];
+  const credentialScopes = Array.isArray(tokenBundle.scopes) ? [...tokenBundle.scopes].sort() : [];
+  if (JSON.stringify(storedScopes) !== JSON.stringify(credentialScopes)) throw new Error('The pending Jira authorization is invalid.');
+  return { tokenBundle, grantedScopes: row.granted_scopes, expiresAt: row.expires_at, encryptedCredentials: row.encrypted_credentials, credentialKeyId: row.credential_key_id };
+}
+
+export function validateAccessibleJiraSite(site) {
+  if (!isRecord(site) || typeof site.id !== 'string' || !CLOUD_ID_PATTERN.test(site.id) || typeof site.name !== 'string' || !site.name.trim() || site.name.length > 200 || typeof site.url !== 'string' || !Array.isArray(site.scopes)) return null;
+  let parsed;
+  try { parsed = new URL(site.url); } catch { return null; }
+  const host = parsed.hostname.toLowerCase();
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port || parsed.pathname !== '/' || parsed.search || parsed.hash || !(host.endsWith('.atlassian.net') || host.endsWith('.jira.com'))) return null;
+  const scopes = [...new Set(site.scopes.filter((scope) => typeof scope === 'string' && scope.length <= 128))];
+  if (!scopes.includes('read:jira-work') || !scopes.includes('write:jira-work')) return null;
+  return { id: site.id, name: site.name.trim(), url: parsed.origin, scopes };
+}
+
+export function sanitizeJiraProjectSummary(project) {
+  if (!isRecord(project) || !JIRA_PROJECT_ID_PATTERN.test(String(project.id || '')) || typeof project.key !== 'string' || !JIRA_PROJECT_KEY_PATTERN.test(project.key) || typeof project.name !== 'string' || !project.name.trim() || project.name.length > 200) return null;
+  return { id: String(project.id), key: project.key, name: project.name.trim() };
+}
+
+async function accessibleSitesForToken(tokenBundle) {
+  const response = await requestAtlassianJson(JIRA_ACCESSIBLE_RESOURCES_ENDPOINT, tokenBundle.accessToken);
+  if (!Array.isArray(response) || response.length > 200) throw new Error('The Atlassian Jira API returned an invalid site list.');
+  return response.map(validateAccessibleJiraSite).filter(Boolean);
+}
+
+export async function listPendingJiraSites(pool, context, keyring) {
+  const { tokenBundle } = await pendingAuthorization(pool, context, keyring);
+  return accessibleSitesForToken(tokenBundle);
+}
+
+export async function searchPendingJiraProjects(pool, context, keyring, cloudId, query, startAt = 0, maxResults = 25) {
+  if (typeof cloudId !== 'string' || !CLOUD_ID_PATTERN.test(cloudId) || typeof query !== 'string' || query.length > 200 || !Number.isInteger(startAt) || startAt < 0 || startAt > 10_000 || !Number.isInteger(maxResults) || maxResults < 1 || maxResults > 50) {
+    throw new TypeError('A valid accessible Jira site and bounded project search are required.');
+  }
+  const { tokenBundle } = await pendingAuthorization(pool, context, keyring);
+  const sites = await accessibleSitesForToken(tokenBundle);
+  if (!sites.some((site) => site.id === cloudId)) throw new Error('The Jira site is not accessible to this pending authorization.');
+  const url = new URL(`${JIRA_API_BASE}/${encodeURIComponent(cloudId)}/rest/api/3/project/search`);
+  url.searchParams.set('startAt', String(startAt));
+  url.searchParams.set('maxResults', String(maxResults));
+  if (query.trim()) url.searchParams.set('query', query.trim());
+  const response = await requestAtlassianJson(url, tokenBundle.accessToken);
+  if (!isRecord(response) || !Array.isArray(response.values) || response.values.length > maxResults) throw new Error('The Atlassian Jira API returned an invalid project list.');
+  const values = response.values.map(sanitizeJiraProjectSummary).filter(Boolean);
+  if (!Number.isInteger(response.startAt) || response.startAt !== startAt || !Number.isInteger(response.maxResults) || response.maxResults < 1 || response.maxResults > maxResults || !Number.isInteger(response.total) || response.total < 0) throw new Error('The Atlassian Jira API returned invalid project pagination.');
+  return { values, startAt: response.startAt, maxResults: response.maxResults, total: response.total, isLast: response.isLast === true };
+}
+
+export async function verifyAndPromotePendingJiraProject(pool, context, selection, keyring) {
+  const { workspaceId, projectId, userSubject, sessionTokenHash } = context || {};
+  const { cloudId, jiraProjectId } = selection || {};
+  if (typeof cloudId !== 'string' || !CLOUD_ID_PATTERN.test(cloudId) || typeof jiraProjectId !== 'string' || !JIRA_PROJECT_ID_PATTERN.test(jiraProjectId)) {
+    throw new TypeError('A valid Jira site and project selection are required.');
+  }
+  const snapshot = await pendingAuthorization(pool, context, keyring);
+  const { tokenBundle } = snapshot;
+  if (typeof tokenBundle.expiresAt === 'string' && Date.parse(tokenBundle.expiresAt) <= Date.now()) {
+    throw new Error('The Jira authorization access token has expired.');
+  }
+  const sites = await accessibleSitesForToken(tokenBundle);
+  const site = sites.find((item) => item.id === cloudId);
+  if (!site) throw new Error('The Jira site is not accessible to this pending authorization.');
+  const projectUrl = `${JIRA_API_BASE}/${encodeURIComponent(cloudId)}/rest/api/3/project/${encodeURIComponent(jiraProjectId)}`;
+  const project = await requestAtlassianJson(projectUrl, tokenBundle.accessToken);
+  const verifiedProject = sanitizeJiraProjectSummary(project);
+  if (!verifiedProject || verifiedProject.id !== jiraProjectId) throw new Error('The selected Jira project could not be verified.');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const pending = await client.query(
+      `SELECT id, encrypted_credentials, credential_key_id, granted_scopes
+       FROM studio_jira_pending_authorizations
+       WHERE workspace_id = $1 AND project_id = $2 AND user_subject = $3 AND session_token_hash = $4
+         AND encrypted_credentials = $5::jsonb AND credential_key_id = $6 AND expires_at > now()
+       FOR UPDATE`,
+      [workspaceId, projectId, userSubject, sessionTokenHash, JSON.stringify(snapshot.encryptedCredentials), snapshot.credentialKeyId],
+    );
+    const row = pending.rows[0];
+    if (!row) throw new Error('The Jira authorization is missing or expired.');
+    decryptJiraTokenBundle(row.encrypted_credentials, { workspaceId, projectId }, keyring);
+    const connection = await client.query(
+      `INSERT INTO studio_jira_connections
+         (id, workspace_id, project_id, connected_by, cloud_id, site_url, jira_project_id, jira_project_key, encrypted_credentials, credential_key_id, granted_scopes, access_token_expires_at, status)
+       SELECT gen_random_uuid(), p.workspace_id, p.id, m.user_subject, $4, $5, $6, $7, $8::jsonb, $9, $10::text[], $11, 'connected'
+       FROM studio_client_projects p
+       JOIN studio_workspace_members m ON m.workspace_id = p.workspace_id AND m.user_subject = $3 AND m.role = 'owner'
+       WHERE p.workspace_id = $1 AND p.id = $2
+       ON CONFLICT (workspace_id, project_id) DO UPDATE SET
+         connected_by = EXCLUDED.connected_by, cloud_id = EXCLUDED.cloud_id, site_url = EXCLUDED.site_url,
+         jira_project_id = EXCLUDED.jira_project_id, jira_project_key = EXCLUDED.jira_project_key,
+         encrypted_credentials = EXCLUDED.encrypted_credentials, credential_key_id = EXCLUDED.credential_key_id,
+         granted_scopes = EXCLUDED.granted_scopes, access_token_expires_at = EXCLUDED.access_token_expires_at,
+         status = 'connected', updated_at = now()
+       RETURNING id, workspace_id, project_id, cloud_id, site_url, jira_project_id, jira_project_key,
+                 granted_scopes, access_token_expires_at, status, created_at, updated_at`,
+      [workspaceId, projectId, userSubject, cloudId, site.url, verifiedProject.id, verifiedProject.key, JSON.stringify(row.encrypted_credentials), row.credential_key_id, row.granted_scopes, tokenBundle.expiresAt],
+    );
+    if (!connection.rows[0]) throw new Error('The project is not available to this workspace owner.');
+    await client.query('DELETE FROM studio_jira_pending_authorizations WHERE id = $1', [row.id]);
+    await client.query(
+      `INSERT INTO studio_audit_events (workspace_id, actor_subject, action, entity_type, entity_id, metadata)
+       VALUES ($1, $2, 'jira.project_connected', 'client_project', $3, $4::jsonb)`,
+      [workspaceId, userSubject, projectId, JSON.stringify({ cloudId, jiraProjectId: verifiedProject.id, jiraProjectKey: verifiedProject.key })],
+    );
+    await client.query('COMMIT');
+    return connection.rows[0];
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}

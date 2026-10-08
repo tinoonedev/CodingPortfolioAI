@@ -17,7 +17,10 @@ import {
   exchangeJiraAuthorizationCode,
   getJiraConnection,
   purgeExpiredJiraOAuthData,
+  listPendingJiraSites,
+  searchPendingJiraProjects,
   storePendingJiraAuthorization,
+  verifyAndPromotePendingJiraProject,
 } from './jiraCredentials.js';
 
 const SESSION_SECONDS = 60 * 60 * 12;
@@ -608,6 +611,92 @@ export function createWorkspaceApp({ config, pool, jiraOAuthConfig = { configure
           ? 'Atlassian rejected this authorization code. Start Jira authorization again.'
           : 'Jira authorization could not be completed. Start again; no connection was created.';
       return response.status(502).json({ error: { code: 'JIRA_AUTHORIZATION_FAILED', message } });
+    }
+  });
+
+  app.get('/api/projects/:projectId/jira/authorization/sites', requireSession, async (request, response) => {
+    if (!UUID_PATTERN.test(request.params.projectId)) {
+      return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+    }
+    if (request.workspaceSession.role !== 'owner') {
+      return response.status(403).json({ error: { code: 'OWNER_REQUIRED', message: 'Only a workspace owner can choose a Jira site.' } });
+    }
+    if (jiraOAuthConfig.configured !== true) {
+      return response.status(503).json({ error: { code: 'JIRA_SETUP_REQUIRED', message: 'Jira OAuth is not configured on this Fieldwork server.', missing: jiraOAuthConfig.missing || [], invalid: jiraOAuthConfig.invalid || [] } });
+    }
+    const sessionToken = cookieValue(request, config.cookieName);
+    try {
+      const sites = await listPendingJiraSites(pool, {
+        workspaceId: request.workspaceSession.workspace_id,
+        projectId: request.params.projectId,
+        userSubject: request.workspaceSession.user_subject,
+        sessionTokenHash: sessionToken ? sha256(sessionToken) : '',
+      }, jiraOAuthConfig.keyring);
+      return response.json({ sites });
+    } catch (error) {
+      const expired = error?.message === 'The Jira authorization is missing or expired.';
+      return response.status(expired ? 410 : 502).json({ error: { code: expired ? 'JIRA_AUTHORIZATION_EXPIRED' : 'JIRA_SITE_LOOKUP_FAILED', message: expired ? 'The pending Jira authorization expired. Start authorization again.' : 'Accessible Jira sites could not be loaded.' } });
+    }
+  });
+
+  app.get('/api/projects/:projectId/jira/authorization/sites/:cloudId/projects', requireSession, async (request, response) => {
+    if (!UUID_PATTERN.test(request.params.projectId)) {
+      return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+    }
+    if (request.workspaceSession.role !== 'owner') {
+      return response.status(403).json({ error: { code: 'OWNER_REQUIRED', message: 'Only a workspace owner can select a Jira project.' } });
+    }
+    if (jiraOAuthConfig.configured !== true) {
+      return response.status(503).json({ error: { code: 'JIRA_SETUP_REQUIRED', message: 'Jira OAuth is not configured on this Fieldwork server.', missing: jiraOAuthConfig.missing || [], invalid: jiraOAuthConfig.invalid || [] } });
+    }
+    const rawStartAt = request.query.startAt === undefined ? '0' : request.query.startAt;
+    const rawMaxResults = request.query.maxResults === undefined ? '25' : request.query.maxResults;
+    const rawQuery = request.query.query === undefined ? '' : request.query.query;
+    if (typeof rawStartAt !== 'string' || !/^\d{1,5}$/.test(rawStartAt) || typeof rawMaxResults !== 'string' || !/^\d{1,2}$/.test(rawMaxResults) || typeof rawQuery !== 'string' || rawQuery.length > 200) {
+      return response.status(400).json({ error: { code: 'INVALID_PROJECT_SEARCH', message: 'Project pagination is invalid.' } });
+    }
+    const sessionToken = cookieValue(request, config.cookieName);
+    try {
+      const projects = await searchPendingJiraProjects(pool, {
+        workspaceId: request.workspaceSession.workspace_id,
+        projectId: request.params.projectId,
+        userSubject: request.workspaceSession.user_subject,
+        sessionTokenHash: sessionToken ? sha256(sessionToken) : '',
+      }, jiraOAuthConfig.keyring, request.params.cloudId, rawQuery, Number(rawStartAt), Number(rawMaxResults));
+      return response.json(projects);
+    } catch (error) {
+      const expired = error?.message === 'The Jira authorization is missing or expired.';
+      const invalid = error instanceof TypeError || error?.message === 'The Jira site is not accessible to this pending authorization.';
+      return response.status(expired ? 410 : invalid ? 400 : 502).json({ error: { code: expired ? 'JIRA_AUTHORIZATION_EXPIRED' : invalid ? 'INVALID_PROJECT_SEARCH' : 'JIRA_PROJECT_SEARCH_FAILED', message: expired ? 'The pending Jira authorization expired. Start authorization again.' : invalid ? 'Select a site returned by the current Jira authorization.' : 'Jira projects could not be loaded.' } });
+    }
+  });
+
+  app.post('/api/projects/:projectId/jira/authorization/selection', requireSession, async (request, response) => {
+    if (!UUID_PATTERN.test(request.params.projectId)) {
+      return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+    }
+    if (request.workspaceSession.role !== 'owner') {
+      return response.status(403).json({ error: { code: 'OWNER_REQUIRED', message: 'Only a workspace owner can connect a Jira project.' } });
+    }
+    if (jiraOAuthConfig.configured !== true) {
+      return response.status(503).json({ error: { code: 'JIRA_SETUP_REQUIRED', message: 'Jira OAuth is not configured on this Fieldwork server.', missing: jiraOAuthConfig.missing || [], invalid: jiraOAuthConfig.invalid || [] } });
+    }
+    if (!request.body || Object.keys(request.body).some((key) => !['cloudId', 'jiraProjectId'].includes(key))) {
+      return response.status(400).json({ error: { code: 'INVALID_JIRA_SELECTION', message: 'Select one Jira site and project.' } });
+    }
+    const sessionToken = cookieValue(request, config.cookieName);
+    try {
+      const connection = await verifyAndPromotePendingJiraProject(pool, {
+        workspaceId: request.workspaceSession.workspace_id,
+        projectId: request.params.projectId,
+        userSubject: request.workspaceSession.user_subject,
+        sessionTokenHash: sessionToken ? sha256(sessionToken) : '',
+      }, { cloudId: request.body?.cloudId, jiraProjectId: request.body?.jiraProjectId }, jiraOAuthConfig.keyring);
+      return response.status(201).json({ connection });
+    } catch (error) {
+      const expired = error?.message === 'The Jira authorization is missing or expired.' || error?.message === 'The Jira authorization access token has expired.';
+      const invalid = error instanceof TypeError || error?.message === 'The Jira site is not accessible to this pending authorization.' || error?.message === 'The selected Jira project could not be verified.';
+      return response.status(expired ? 410 : invalid ? 400 : 502).json({ error: { code: expired ? 'JIRA_AUTHORIZATION_EXPIRED' : invalid ? 'JIRA_SELECTION_INVALID' : 'JIRA_SELECTION_FAILED', message: expired ? 'The pending Jira authorization expired. Start authorization again.' : invalid ? 'The selected Jira site or project could not be verified.' : 'The Jira project could not be connected.' } });
     }
   });
 

@@ -129,6 +129,18 @@ test('invited accounts persist workspace projects and cannot read another worksp
     expect(jiraSetup.error.code).toBe('JIRA_SETUP_REQUIRED');
     expect(jiraSetup.error.missing).toContain('JIRA_OAUTH_CLIENT_ID');
     expect(JSON.stringify(jiraSetup)).not.toMatch(/clientSecret|accessToken|refreshToken|ciphertext/i);
+    const jiraSites = await page.context().request.get(`/api/projects/${projectBefore.id}/jira/authorization/sites`);
+    expect(jiraSites.status()).toBe(503);
+    expect((await jiraSites.json()).error.code).toBe('JIRA_SETUP_REQUIRED');
+    const jiraProjectSearch = await page.context().request.get(`/api/projects/${projectBefore.id}/jira/authorization/sites/00000000-0000-4000-8000-000000000001/projects`);
+    expect(jiraProjectSearch.status()).toBe(503);
+    expect((await jiraProjectSearch.json()).error.code).toBe('JIRA_SETUP_REQUIRED');
+    const jiraSelection = await page.context().request.post(`/api/projects/${projectBefore.id}/jira/authorization/selection`, {
+      data: { cloudId: '00000000-0000-4000-8000-000000000001', jiraProjectId: '10001' },
+      headers: { origin: 'http://127.0.0.1:4173' },
+    });
+    expect(jiraSelection.status()).toBe(503);
+    expect((await jiraSelection.json()).error.code).toBe('JIRA_SETUP_REQUIRED');
     const invalidJiraCallback = await page.context().request.get(`/api/integrations/jira/callback?state=${randomBytes(32).toString('base64url')}&code=unused`);
     expect(invalidJiraCallback.status()).toBe(400);
     expect((await invalidJiraCallback.json()).error.code).toBe('JIRA_CALLBACK_INVALID');

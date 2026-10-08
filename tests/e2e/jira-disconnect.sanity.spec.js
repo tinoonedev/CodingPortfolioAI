@@ -98,6 +98,7 @@ test('owner disconnect removes only this project credentials and members cannot 
 
     const page = await ownerContext.newPage();
     await page.goto('/');
+    await page.getByRole('navigation', { name: 'Client projects' }).getByRole('button', { name: 'Primary disconnect project' }).click();
     await expect(page.getByRole('heading', { name: 'Primary disconnect project' })).toBeVisible();
     const panel = page.getByRole('region', { name: 'Jira connection' });
     await expect(panel.getByRole('status')).toHaveText('Connected');
@@ -119,6 +120,7 @@ test('owner disconnect removes only this project credentials and members cannot 
     expect(disconnectedBody.connection.status).toBe('disconnected');
     expect(JSON.stringify(disconnectedBody)).not.toMatch(/encrypted_credentials|ciphertext|accessToken|refreshToken|access-primary|refresh-primary/i);
     await page.reload();
+    await page.getByRole('navigation', { name: 'Client projects' }).getByRole('button', { name: 'Primary disconnect project' }).click();
     await expect(panel.getByRole('status').first()).toHaveText('Disconnected');
 
     const storedCredentials = await pool.query(
@@ -150,6 +152,7 @@ test('owner disconnect removes only this project credentials and members cannot 
 
     const memberPage = await memberContext.newPage();
     await memberPage.goto('/');
+    await memberPage.getByRole('navigation', { name: 'Client projects' }).getByRole('button', { name: 'Primary disconnect project' }).click();
     await expect(memberPage.getByRole('heading', { name: 'Primary disconnect project' })).toBeVisible();
     const memberPanel = memberPage.getByRole('region', { name: 'Jira connection' });
     await expect(memberPanel.getByRole('status').first()).toHaveText('Disconnected');

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { resolveWorkspaceProjectListView } from './domain/workspaceProjectList.js';
 
 const emptyBrief = { name: '', client: '', problem: '', targetUser: '', successSignal: '', approved: false };
 
@@ -326,7 +327,7 @@ function WorkspaceInvitation() {
   </details>;
 }
 
-function ProjectForm({ onCreate, busy, error }) {
+function ProjectForm({ onCreate, onCancel, busy, error }) {
   const [form, setForm] = useState(emptyBrief);
   const update = (field) => (event) => setForm((current) => ({ ...current, [field]: event.target.value }));
   const submit = async (event) => {
@@ -346,7 +347,7 @@ function ProjectForm({ onCreate, busy, error }) {
     </div>
     <label className="workspace-brief-approval"><input required type="checkbox" checked={form.approved} onChange={(event) => setForm((current) => ({ ...current, approved: event.target.checked }))} /><span><b>I reviewed and approve this brief for the workspace.</b><small>This records my approval with my signed-in account and timestamp.</small></span></label>
     {error && <p className="workspace-alert" role="alert">{error}</p>}
-    <div className="workspace-form-actions"><span>Saving creates a server-side project record.</span><button className="button primary-button" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Create client project'} <span>↗</span></button></div>
+    <div className="workspace-form-actions">{onCancel ? <button className="button subtle-button" type="button" onClick={onCancel} disabled={busy}>Back to Studio</button> : <span>Saving creates a server-side project record.</span>}<button className="button primary-button" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Create client project'} <span>↗</span></button></div>
   </form>;
 }
 
@@ -563,31 +564,67 @@ function ProjectDetails({ project, canEdit, onSaveBrief, jiraCallback, onJiraCal
   </div>;
 }
 
+function EmptyStudioState({ onCreate }) {
+  return <section className="studio-home-state studio-empty-state" aria-labelledby="studio-empty-title">
+    <span className="studio-state-mark" aria-hidden="true">＋</span>
+    <p className="eyebrow">A CLEAR START</p>
+    <h2 id="studio-empty-title">Your first client project starts with a brief.</h2>
+    <p>Describe the client, the problem to solve, who it affects, and how success will be measured. Nothing is saved until you submit the approved brief.</p>
+    <button className="button primary-button" type="button" onClick={onCreate}>Create your first brief <span>↗</span></button>
+  </section>;
+}
+
+function ProjectSelectionState({ onCreate }) {
+  return <section className="studio-home-state studio-selection-state" aria-labelledby="studio-selection-title">
+    <span className="studio-state-mark" aria-hidden="true">⌁</span>
+    <p className="eyebrow">STUDIO OVERVIEW</p>
+    <h2 id="studio-selection-title">Choose a project to open its room.</h2>
+    <p>Your project details and connected work appear after you select a project from the workspace list.</p>
+    <button className="button subtle-button" type="button" onClick={onCreate}>＋ Start another brief</button>
+  </section>;
+}
+
 export default function Workspace() {
   const [jiraReturn] = useState(readJiraCallback);
   const handledJiraReturn = useRef(false);
   const handleJiraCallbackHandled = useCallback(() => { handledJiraReturn.current = true; }, []);
-  const [state, setState] = useState({ loading: true, session: null, projects: [], selectedId: null, setupError: null, signInError: '' });
+  const [state, setState] = useState({ loading: true, session: null, projects: [], selectedId: null, creatingProject: false, projectListStatus: 'loading', projectListError: '', setupError: null, signInError: '' });
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState('');
+
+  const loadProjects = useCallback(async () => {
+    setState((current) => ({ ...current, projectListStatus: 'loading', projectListError: '', projects: [], selectedId: null, creatingProject: false }));
+    try {
+      const { projects } = await api('/api/projects');
+      const callbackProjectId = jiraReturn?.projectId && projects.some((project) => project.id === jiraReturn.projectId) ? jiraReturn.projectId : null;
+      setState((current) => ({ ...current, projectListStatus: 'ready', projectListError: '', projects, selectedId: callbackProjectId }));
+    } catch (error) {
+      if (error.status === 401) {
+        setState((current) => ({ ...current, loading: false, session: null, projects: [], selectedId: null, projectListStatus: 'ready', projectListError: '', signInError: 'Your workspace session expired. Sign in again.' }));
+      } else if (error.code === 'SETUP_REQUIRED') {
+        setState((current) => ({ ...current, loading: false, session: null, projects: [], selectedId: null, projectListStatus: 'ready', projectListError: '', setupError: error }));
+      } else {
+        setState((current) => ({ ...current, projectListStatus: 'error', projectListError: 'We could not load your client projects. Your workspace session is still active; retry to check the saved project list.' }));
+      }
+    }
+  }, [jiraReturn]);
 
   const load = useCallback(async () => {
     setState((current) => ({ ...current, loading: true, setupError: null, signInError: '' }));
     try {
       const { user, workspace } = await api('/api/session');
-      const { projects } = await api('/api/projects');
-      const callbackProjectExists = jiraReturn?.projectId && projects.some((project) => project.id === jiraReturn.projectId);
-      setState({ loading: false, session: { user, workspace }, projects, selectedId: callbackProjectExists ? jiraReturn.projectId : projects[0]?.id || null, setupError: null, signInError: '' });
+      setState((current) => ({ ...current, loading: false, session: { user, workspace }, projects: [], selectedId: null, projectListStatus: 'loading', projectListError: '', setupError: null, signInError: '' }));
+      await loadProjects();
     } catch (error) {
       if (error.code === 'SETUP_REQUIRED' || error.code === 'WORKSPACE_UNAVAILABLE') {
-        setState({ loading: false, session: null, projects: [], selectedId: null, setupError: error, signInError: '' });
+        setState((current) => ({ ...current, loading: false, session: null, projects: [], selectedId: null, projectListStatus: 'ready', projectListError: '', setupError: error, signInError: '' }));
       } else if (error.status === 401) {
-        setState({ loading: false, session: null, projects: [], selectedId: null, setupError: null, signInError: '' });
+        setState((current) => ({ ...current, loading: false, session: null, projects: [], selectedId: null, projectListStatus: 'ready', projectListError: '', setupError: null, signInError: '' }));
       } else {
-        setState({ loading: false, session: null, projects: [], selectedId: null, setupError: null, signInError: 'The workspace could not be reached. Check the connection and try again.' });
+        setState((current) => ({ ...current, loading: false, session: null, projects: [], selectedId: null, projectListStatus: 'ready', projectListError: '', setupError: null, signInError: 'The workspace could not be reached. Check the connection and try again.' }));
       }
     }
-  }, [jiraReturn]);
+  }, [loadProjects]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -596,7 +633,7 @@ export default function Workspace() {
     setFormError('');
     try {
       const { project } = await api('/api/projects', { method: 'POST', body: JSON.stringify(form) });
-      setState((current) => ({ ...current, projects: [project, ...current.projects], selectedId: project.id }));
+      setState((current) => ({ ...current, projects: [project, ...current.projects], selectedId: project.id, creatingProject: false }));
       return true;
     } catch (error) {
       setFormError(error.message);
@@ -626,9 +663,13 @@ export default function Workspace() {
   if (state.setupError) return <SetupNotice error={state.setupError} onRetry={load} />;
   if (!state.session) return <SignIn initialError={jiraReturn?.outcome === 'sign_in_required' ? jiraCallbackMessages.sign_in_required : state.signInError} />;
 
-  const selectedProject = state.projects.find((project) => project.id === state.selectedId);
+  const projectListView = resolveWorkspaceProjectListView({ status: state.projectListStatus, projects: state.projects, selectedId: state.selectedId });
+  const selectedProject = projectListView.selectedProject;
   const callbackProjectExists = jiraReturn?.projectId && state.projects.some((project) => project.id === jiraReturn.projectId);
-  const showJiraCallbackGlobally = jiraReturn && !handledJiraReturn.current && (!jiraReturn.projectId || !callbackProjectExists);
+  const projectListConfirmed = projectListView.kind === 'projects' || projectListView.kind === 'empty';
+  const showJiraCallbackGlobally = jiraReturn && !handledJiraReturn.current && (
+    !jiraReturn.projectId || (projectListConfirmed && !callbackProjectExists)
+  );
   return <main className="workspace-page workspace-authenticated">
     <header className="workspace-topbar">
       <div className="workspace-brand"><span className="brand-mark">f</span><span>FIELDWORK<small>AI PRODUCT STUDIO</small></span></div>
@@ -637,16 +678,23 @@ export default function Workspace() {
     {showJiraCallbackGlobally && <p className="workspace-alert jira-global-notice" role="status">{jiraReturn.projectId ? 'The Jira authorization could not be matched to a client project in this workspace. No connection was changed.' : jiraCallbackMessages[jiraReturn.outcome]}</p>}
     {state.session.user.role === 'owner' && <WorkspaceInvitation />}
     <section className="workspace-content">
-      <div className="workspace-page-heading"><div><p className="eyebrow"><span className="live-dot" /> STUDIO OPERATIONS</p><h1>Your projects, built on real work.</h1><p>Client briefs are private to this workspace and persist on the server.</p></div><span className="workspace-project-count">{state.projects.length} {state.projects.length === 1 ? 'PROJECT' : 'PROJECTS'}</span></div>
+      <div className="workspace-page-heading"><div><p className="eyebrow"><span className="live-dot" /> YOUR WORKSPACE</p><h1>Your studio, in motion.</h1><p>Client projects saved to <strong>{state.session.workspace.name}</strong> appear here.</p></div>{projectListView.count !== null && <div className="workspace-project-count"><b>{projectListView.count}</b><span>{projectListView.count === 1 ? 'PROJECT' : 'PROJECTS'} IN WORKSPACE</span></div>}</div>
       <div className="workspace-layout">
-        <aside className="workspace-project-list" aria-label="Client projects">
-          <div className="workspace-list-heading"><b>CLIENT PROJECTS</b><span>{state.projects.length}</span></div>
-          {state.projects.map((project) => <button key={project.id} type="button" className={`workspace-project-option ${project.id === state.selectedId ? 'selected' : ''}`} onClick={() => setState((current) => ({ ...current, selectedId: project.id }))}><span className="workspace-option-mark">{project.name.slice(0, 1).toUpperCase()}</span><span><b>{project.name}</b><small>{project.client}</small></span><span className="option-chevron">›</span></button>)}
-          {state.projects.length === 0 && <p className="workspace-empty-list">Your first client project will appear here.</p>}
-        </aside>
+        <nav className="workspace-project-list" aria-label="Client projects" aria-busy={projectListView.kind === 'loading'}>
+          <div className="workspace-list-heading"><b>PROJECTS</b>{projectListView.count !== null && <span>{projectListView.count}</span>}</div>
+          {projectListView.kind === 'loading' && <p className="workspace-list-message" role="status">Loading your projects…</p>}
+          {projectListView.projects.map((project) => <button key={project.id} type="button" aria-pressed={project.id === state.selectedId} className={`workspace-project-option ${project.id === state.selectedId ? 'selected' : ''}`} onClick={() => setState((current) => ({ ...current, selectedId: project.id, creatingProject: false }))}><span className="workspace-option-mark" aria-hidden="true">{project.name.slice(0, 1).toUpperCase()}</span><span><b>{project.name}</b><small>{project.client}</small></span><span className="option-chevron" aria-hidden="true">›</span></button>)}
+          {projectListView.kind === 'empty' && <p className="workspace-list-message">No saved projects yet</p>}
+          {projectListView.kind === 'error' && <p className="workspace-list-message">Project list unavailable</p>}
+        </nav>
         <div className="workspace-main-panel">
-          {selectedProject ? <ProjectDetails key={selectedProject.id} project={selectedProject} canEdit={state.session.user.role === 'owner'} onSaveBrief={saveProjectBrief} jiraCallback={jiraReturn?.projectId === selectedProject.id && !handledJiraReturn.current ? jiraReturn : null} onJiraCallbackHandled={handleJiraCallbackHandled} /> : <ProjectForm onCreate={createProject} busy={busy} error={formError} />}
-          {selectedProject && <button className="workspace-add-project" type="button" onClick={() => setState((current) => ({ ...current, selectedId: null }))}>＋ Add a client project</button>}
+          {projectListView.kind === 'loading' && <p className="studio-inline-status" role="status">Loading your workspace projects…</p>}
+          {projectListView.kind === 'error' && <section className="studio-home-state studio-error-state" aria-labelledby="studio-project-error-title"><span className="studio-state-mark" aria-hidden="true">!</span><p className="eyebrow">PROJECT LIST UNAVAILABLE</p><h2 id="studio-project-error-title">Your projects could not be loaded.</h2><p>{state.projectListError}</p><button className="button primary-button" type="button" onClick={loadProjects}>Retry project list <span>↻</span></button></section>}
+          {projectListView.kind === 'empty' && !state.creatingProject && <EmptyStudioState onCreate={() => setState((current) => ({ ...current, creatingProject: true }))} />}
+          {projectListView.kind === 'projects' && !selectedProject && !state.creatingProject && <ProjectSelectionState onCreate={() => setState((current) => ({ ...current, creatingProject: true }))} />}
+          {state.creatingProject && <ProjectForm onCreate={createProject} onCancel={() => { setState((current) => ({ ...current, creatingProject: false })); setFormError(''); }} busy={busy} error={formError} />}
+          {selectedProject && !state.creatingProject && <ProjectDetails key={selectedProject.id} project={selectedProject} canEdit={state.session.user.role === 'owner'} onSaveBrief={saveProjectBrief} jiraCallback={jiraReturn?.projectId === selectedProject.id && !handledJiraReturn.current ? jiraReturn : null} onJiraCallbackHandled={handleJiraCallbackHandled} />}
+          {projectListView.kind === 'projects' && !state.creatingProject && <button className="workspace-add-project" type="button" onClick={() => setState((current) => ({ ...current, selectedId: null, creatingProject: true }))}>＋ Start another brief</button>}
         </div>
       </div>
       <footer className="workspace-footer"><span>◈ Workspace isolation is enforced by the API.</span><a href="/demo">Open prototype demo ↗</a></footer>

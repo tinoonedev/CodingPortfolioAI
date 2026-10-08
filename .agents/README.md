@@ -25,11 +25,13 @@ Skills use the Agent Skills convention: one folder per skill with a `SKILL.md` f
 - `skills/secure-integrations/SKILL.md`
 - `skills/ci-smoke-sanity/SKILL.md`
 - `skills/mcp-integrations/SKILL.md`
+- `skills/jira-ticket-formatting/SKILL.md`
 
 ## Templates
 
 - `templates/feature-requirements.feature` — Gherkin acceptance criteria for one feature.
 - `templates/development-log-subtask.md` — Jira development-log subtask fields and milestone comment format.
+- `templates/jira-feature-description.html` — Jira-supported rich-text feature description with readable, color-coded Gherkin keywords.
 
 ## Handoff contract
 

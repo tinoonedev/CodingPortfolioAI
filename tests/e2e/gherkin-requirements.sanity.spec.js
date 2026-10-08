@@ -40,6 +40,8 @@ test('owner saves Gherkin revisions, receives parser feedback, and sees brief ch
     await page.getByLabel('Email address').fill(email);
     await page.getByLabel('Password').fill(password);
     await page.getByRole('button', { name: 'Sign in' }).click();
+    await expect(page.getByRole('heading', { name: 'Your studio, in motion.' })).toBeVisible();
+    await page.getByRole('button', { name: 'Create your first brief' }).click();
     await expect(page.getByRole('heading', { name: 'Start with the brief.' })).toBeVisible();
     await page.getByLabel('Project name').fill(`Gherkin E2E ${randomUUID()}`);
     await page.getByLabel('Client name').fill('Fieldwork test tenant');

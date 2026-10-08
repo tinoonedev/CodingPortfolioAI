@@ -86,11 +86,11 @@ test('invited accounts persist workspace projects and cannot read another worksp
     await page.getByLabel('Password').fill(password);
     await page.getByRole('button', { name: 'Create account' }).click();
 
-    await expect(page.getByRole('heading', { name: 'Your projects, built on real work.' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Your studio, in motion.' })).toBeVisible();
+    await expect(page.getByText('Your first client project starts with a brief.')).toBeVisible();
+    await page.getByRole('button', { name: 'Create your first brief' }).click();
+    await expect(page.getByRole('heading', { name: 'Start with the brief.' })).toBeVisible();
     const projectName = `Workspace E2E ${randomUUID().slice(0, 8)}`;
-    if (await page.getByRole('button', { name: 'Add a client project' }).count()) {
-      await page.getByRole('button', { name: 'Add a client project' }).click();
-    }
     await page.getByLabel('Project name').fill(projectName);
     await page.getByLabel('Client name').fill('Integration Client');
     await page.getByLabel('Business problem').fill('Verify real PostgreSQL-backed account persistence.');
@@ -99,6 +99,25 @@ test('invited accounts persist workspace projects and cannot read another worksp
     await page.getByLabel('I reviewed and approve this brief for the workspace.').check();
     await page.getByRole('button', { name: 'Create client project' }).click();
     await expect(page.getByRole('heading', { name: projectName })).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Your studio, in motion.' })).toBeVisible();
+    const projectChoice = page.getByRole('navigation', { name: 'Client projects' }).getByRole('button', { name: projectName });
+    await expect(projectChoice).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.getByRole('heading', { name: projectName, level: 2 })).toHaveCount(0);
+    for (const width of [320, 768, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      const hasHorizontalOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+      expect(hasHorizontalOverflow, `horizontal overflow at ${width}px`).toBe(false);
+    }
+    await projectChoice.focus();
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Shift+Tab');
+    await expect(projectChoice).toBeFocused();
+    const focusOutlineWidth = await projectChoice.evaluate((element) => Number.parseFloat(getComputedStyle(element).outlineWidth));
+    expect(focusOutlineWidth).toBeGreaterThanOrEqual(2);
+    await page.keyboard.press('Space');
+    await expect(projectChoice).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByRole('heading', { name: projectName, level: 2 })).toBeVisible();
     const jiraPanel = page.getByRole('region', { name: 'Jira connection' });
     await expect(jiraPanel).toBeVisible();
     await expect(jiraPanel.getByRole('status')).toHaveText('Not connected');
@@ -238,7 +257,8 @@ test('invited accounts persist workspace projects and cannot read another worksp
     await page.getByLabel('Email address').fill(email);
     await page.getByLabel('Password').fill(password);
     await page.getByRole('button', { name: 'Sign in' }).click();
-
+    await expect(page.getByRole('heading', { name: 'Your studio, in motion.' })).toBeVisible();
+    await page.getByRole('navigation', { name: 'Client projects' }).getByRole('button', { name: projectName }).click();
     await expect(page.getByRole('heading', { name: projectName })).toBeVisible();
     const projectsAfter = await page.context().request.get('/api/projects');
     const projectAfter = (await projectsAfter.json()).projects.find((project) => project.name === projectName);
@@ -260,6 +280,8 @@ test('invited accounts persist workspace projects and cannot read another worksp
     await page.getByLabel('Email address').fill(memberEmail);
     await page.getByLabel('Password').fill(memberPassword);
     await page.getByRole('button', { name: 'Create account' }).click();
+    await expect(page.getByRole('heading', { name: 'Choose a project to open its room.' })).toBeVisible();
+    await page.getByRole('navigation', { name: 'Client projects' }).getByRole('button', { name: projectName }).click();
     await expect(page.getByRole('heading', { name: projectName })).toBeVisible();
     await expect(page.getByText('Invite a workspace member')).toHaveCount(0);
     const memberJiraPanel = page.getByRole('region', { name: 'Jira connection' });

@@ -11,6 +11,7 @@ import {
   orderWorkPlanTasks,
   validateJiraWorkPlan,
 } from '../src/domain/jiraWorkPlan.js';
+import { getJiraConnection } from './jiraCredentials.js';
 
 const SESSION_SECONDS = 60 * 60 * 12;
 const INVITE_SECONDS = 60 * 60 * 24;
@@ -91,7 +92,7 @@ function toRequirementRevision(row, currentBriefHash) {
   };
 }
 
-export function createWorkspaceApp({ config, pool }) {
+export function createWorkspaceApp({ config, pool, jiraOAuthConfig = { configured: false, missing: [], invalid: [] } }) {
   const app = express();
 
   app.disable('x-powered-by');
@@ -513,6 +514,30 @@ export function createWorkspaceApp({ config, pool }) {
       return response.json({ project: toProject(result.rows[0]) });
     } catch {
       return response.status(503).json({ error: { code: 'WORKSPACE_UNAVAILABLE', message: 'The workspace service is temporarily unavailable.' } });
+    }
+  });
+
+  app.get('/api/projects/:projectId/jira/connection', requireSession, async (request, response) => {
+    if (!UUID_PATTERN.test(request.params.projectId)) {
+      return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+    }
+    try {
+      const project = await pool.query(
+        'SELECT 1 FROM studio_client_projects WHERE id = $1 AND workspace_id = $2',
+        [request.params.projectId, request.workspaceSession.workspace_id],
+      );
+      if (!project.rows[0]) {
+        return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+      }
+      const connection = await getJiraConnection(pool, request.workspaceSession.workspace_id, request.params.projectId);
+      return response.json({
+        configured: jiraOAuthConfig.configured === true,
+        setup: { missing: jiraOAuthConfig.missing || [], invalid: jiraOAuthConfig.invalid || [] },
+        status: connection?.status || 'not_connected',
+        connection,
+      });
+    } catch {
+      return response.status(503).json({ error: { code: 'WORKSPACE_UNAVAILABLE', message: 'The Jira connection status is temporarily unavailable.' } });
     }
   });
 

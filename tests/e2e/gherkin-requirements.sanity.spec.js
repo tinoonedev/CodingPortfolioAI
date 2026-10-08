@@ -116,7 +116,7 @@ test('owner saves Gherkin revisions, receives parser feedback, and sees brief ch
 
     await editor.fill('Feature: Invalid requirements\n  Scenario: Missing a precondition\n    When the owner saves\n    Then Fieldwork returns an error');
     await page.getByRole('button', { name: 'Validate and save revision' }).click();
-    await expect(page.getByRole('alert')).toContainText('needs an explicit given step');
+    await expect(page.locator('.workspace-requirements').getByRole('alert')).toContainText('needs an explicit given step');
     await expect(page.getByText('1 REVISION')).toBeVisible();
     const afterInvalid = await page.context().request.get(`/api/projects/${projectId}/requirements`);
     expect((await afterInvalid.json()).revisions).toHaveLength(1);

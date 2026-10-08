@@ -51,6 +51,52 @@
 .workspace-project-footer time { color: #d4ddca; }
 .workspace-edit-brief { font-size: 12px; }
 
+.workspace-room-overview,
+.workspace-activity-panel { display: grid; gap: 14px; padding: 18px; border: 1px solid #343d2f; border-radius: 5px; background: #191e17; }
+.workspace-room-overview h3,
+.workspace-activity-heading h3 { margin: 3px 0; color: #e5ebdd; font-size: 18px; }
+.workspace-room-overview>div:first-child>p:last-child,
+.workspace-activity-heading>div>p:last-child { max-width: 720px; margin: 6px 0 0; color: #aab39f; font-size: 13px; line-height: 1.55; }
+.workspace-room-cards { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+.workspace-room-card { display: flex; align-items: flex-start; gap: 11px; min-width: 0; padding: 13px; border: 1px solid #374231; border-radius: 4px; background: #20261d; }
+.workspace-room-icon { display: grid; place-items: center; width: 34px; height: 34px; flex: none; border: 1px solid #46543a; border-radius: 4px; color: #c9f27a; font-size: 18px; }
+.workspace-room-card>div { display: grid; gap: 5px; min-width: 0; }
+.workspace-room-card b { color: #e2ead8; font-size: 14px; }
+.workspace-room-status { color: #d3dea4; font-size: 13px; }
+.workspace-room-card p { margin: 0; color: #aab39f; font-size: 12px; line-height: 1.5; }
+.workspace-room-next .button { justify-self: start; min-height: 42px; margin-top: 4px; font-size: 12px; }
+.workspace-activity-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.workspace-activity-heading .button { min-height: 42px; flex: none; font-size: 12px; }
+.workspace-activity-columns { display: grid; grid-template-columns: minmax(0,1.4fr) minmax(220px,.8fr); gap: 12px; }
+.workspace-activity-list,
+.workspace-agent-activity { min-width: 0; padding: 12px; border: 1px solid #343e2f; border-radius: 4px; background: #1d231a; }
+.workspace-activity-list h4,
+.workspace-agent-activity h4 { margin: 0 0 10px; color: #dfe8d5; font-size: 14px; }
+.workspace-activity-list ol,
+.workspace-agent-activity ol { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.workspace-activity-list li,
+.workspace-agent-activity li { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 8px 0; border-top: 1px solid #30382b; }
+.workspace-activity-mark { display: grid; place-items: center; width: 27px; height: 27px; flex: none; border: 1px solid #48583b; border-radius: 50%; color: #c9f27a; font-size: 14px; }
+.workspace-activity-list li>div,
+.workspace-agent-activity li>span { display: grid; flex: 1; gap: 3px; min-width: 0; }
+.workspace-activity-list li b,
+.workspace-agent-activity li b { overflow-wrap: anywhere; color: #e1e8d8; font-size: 12px; }
+.workspace-activity-list li small,
+.workspace-agent-activity li small { color: #aab39f; font-size: 12px; text-transform: capitalize; }
+.workspace-activity-list time,
+.workspace-agent-activity time { flex: none; color: #b5c09f; font-size: 11px; text-align: right; }
+.workspace-activity-empty,
+.workspace-agent-activity>p,
+.workspace-activity-state { margin: 0; color: #b3bdab; font-size: 13px; line-height: 1.55; }
+.workspace-activity-error { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; color: #ffd0bf; }
+.workspace-activity-error p { margin: 0; font-size: 13px; }
+.workspace-activity-error .button { min-height: 42px; font-size: 12px; }
+.workspace-activity-panel :focus-visible,
+.workspace-room-overview :focus-visible { outline: 2px solid #c9f27a; outline-offset: 2px; }
+
+@media(max-width:700px) { .workspace-room-cards,.workspace-activity-columns { grid-template-columns: 1fr; } }
+@media(max-width:480px) { .workspace-room-overview,.workspace-activity-panel { padding: 13px; } .workspace-activity-heading { flex-direction: column; } .workspace-activity-list li,.workspace-agent-activity li { align-items: flex-start; flex-wrap: wrap; } .workspace-activity-list time,.workspace-agent-activity time { margin-left: 36px; text-align: left; } }
+
 .jira-connection-panel{display:grid;gap:12px;padding:18px;border:1px solid #343d2f;border-radius:5px;background:#191e17}.jira-panel-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:18px}.jira-panel-heading h3{margin:3px 0;color:#e5ebdd;font-size:17px}.jira-panel-heading>div>p:last-child{margin:5px 0 0;color:#98a291;font-size:9px;line-height:1.5}.jira-status-chip{padding:5px 8px;border:1px solid #454d3d;border-radius:3px;color:#b8c0ae;font:8px var(--mono);white-space:nowrap}.jira-status-chip.is-connected{border-color:#59723f;background:#222a1d;color:#d2eca9}.jira-setup-notice{padding:11px;border:1px solid #655736;border-radius:4px;background:#282419;color:#e9d89c;font-size:9px;line-height:1.6}.jira-setup-notice p{margin:4px 0;color:#c5b989}.jira-setup-notice ul,.jira-panel-error ul{margin:6px 0 0;padding-left:17px}.jira-setup-notice code,.jira-panel-error code{color:#f2dfaa;font:8px var(--mono)}.jira-connected-details{display:grid;grid-template-columns:minmax(0,1fr) minmax(120px,.4fr);gap:10px}.jira-connected-details span{display:grid;gap:4px;padding:10px;border:1px solid #343e2f;border-radius:4px;background:#1d231a}.jira-connected-details small{color:#899382;font:7px var(--mono);letter-spacing:.05em}.jira-connected-details b{overflow-wrap:anywhere;color:#e0e8d8;font:10px var(--mono)}.jira-panel-notice{margin:0;padding:9px;border:1px solid #485d37;border-radius:4px;background:#20291b;color:#d6edb2;font-size:9px;line-height:1.5}.jira-panel-error{margin:0;font-size:9px}.jira-panel-actions{display:flex;flex-wrap:wrap;gap:8px}.jira-selection-flow{display:grid;gap:9px;padding:13px;border:1px solid #3a4433;border-radius:4px;background:#1b2119}.jira-selection-flow h4{margin:0;color:#e4ebdd;font-size:12px}.jira-selection-flow>label,.jira-project-search>label{color:#cbd4c1;font-size:9px}.jira-selection-flow select,.jira-project-search input{width:100%;min-height:36px;padding:8px 10px;border:1px solid #394434;border-radius:4px;background:#141912;color:#e5ecdc;font:9px var(--mono)}.jira-project-search{display:grid;gap:7px}.jira-project-search>div{display:flex;gap:7px}.jira-project-search input{flex:1;min-width:0}.jira-project-search button{white-space:nowrap}.jira-panel-muted{margin:0;color:#98a291;font-size:9px;line-height:1.5}.jira-results-footer{display:flex;justify-content:space-between;gap:10px;color:#8e9988;font-size:8px}.jira-results-footer>div{display:flex;gap:12px}.jira-results-footer button:disabled{opacity:.45;cursor:not-allowed}.jira-confirm-button{justify-self:start}.jira-global-notice{margin:12px 4.2% 0}.jira-selection-flow :focus-visible,.jira-panel-actions :focus-visible{outline:2px solid #c9f27a;outline-offset:2px}
 
 .workspace-project-stack{display:grid;gap:14px}.workspace-edit-brief,.requirements-retry{border:0;background:transparent;color:#c9f27a;font:inherit;font-size:9px;cursor:pointer}.workspace-edit-brief{margin-left:auto}.brief-editor{padding:18px;border:1px solid #394333;border-radius:5px;background:#1a2018}.brief-editor h3{margin:0;color:#e6ecdf;font-size:17px}.workspace-requirements{padding:18px;border:1px solid #343d2f;border-radius:5px;background:#191e17}.workspace-requirements-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:18px}.workspace-requirements-heading h3{margin:3px 0;color:#e5ebdd;font-size:17px}.workspace-requirements-heading>div>p:last-child{margin:5px 0 0;color:#98a291;font-size:9px;line-height:1.5}.requirements-count{padding:5px 7px;border:1px solid #3d4834;border-radius:3px;color:#b5c29f;font:8px var(--mono);white-space:nowrap}.requirements-editor{display:grid;gap:8px;margin-top:15px}.requirements-editor>label{color:#dce5d3;font-size:10px;font-weight:600}.requirements-editor textarea,.workspace-project-form input,.workspace-project-form textarea{width:100%;padding:10px 11px;border:1px solid #3b4635;border-radius:4px;background:#141912;color:#e7ecdf;font:10px/1.6 var(--mono);resize:vertical}.requirements-editor textarea:focus,.workspace-project-form input:focus,.workspace-project-form textarea:focus{outline:2px solid #95b963;outline-offset:1px}.requirements-editor textarea::placeholder{color:#737e6d;opacity:1}.requirements-editor-footer{display:flex;justify-content:space-between;align-items:center;gap:10px}.requirements-editor-footer>span{color:#8e9988;font-size:8px;line-height:1.5}.requirements-editor-footer .button{white-space:nowrap}.requirements-empty{padding:12px 0;color:#98a291;font-size:9px}.requirements-error{margin-top:12px}.requirements-error ul{margin:8px 0;padding-left:19px;color:#f0c4ac;font-size:9px;line-height:1.7}.requirements-retry{display:block;margin:8px 0 0;padding:0}.requirements-saved{margin:12px 0 0;padding:9px;border:1px solid #536b3e;border-radius:4px;background:#20291b;color:#d6edb2;font-size:9px;line-height:1.5}.requirements-history{display:grid;gap:7px;margin:13px 0 0;padding:0;list-style:none}.requirements-history details{border:1px solid #343e2f;border-radius:4px;background:#1d231a}.requirements-history summary{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px;cursor:pointer;list-style:none}.requirements-history summary::-webkit-details-marker{display:none}.requirements-history summary>span:first-child{display:grid;gap:3px}.requirements-history summary b{color:#e1e8d8;font-size:9px}.requirements-history summary small{color:#899382;font-size:8px}.revision-current,.revision-stale{font:7px var(--mono);letter-spacing:.04em}.revision-current{color:#bddd8d}.revision-stale{color:#e4c078}.revision-warning{margin:0;padding:9px 10px;border-block:1px solid #5a4b2f;background:#2b261a;color:#e9d294;font-size:8px;line-height:1.5}.requirements-history pre{max-height:380px;overflow:auto;margin:0;padding:12px;border-bottom:1px solid #343e2f;color:#d5dfc9;font:9px/1.6 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}.revision-scenarios{display:grid;gap:6px;margin:0;padding:10px;list-style:none}.revision-scenarios li{display:flex;flex-wrap:wrap;align-items:center;gap:6px;color:#aeb8a5;font-size:8px}.revision-scenarios code{color:#c9f27a;font:7px var(--mono)}.revision-scenarios small{color:#cfaae0;font:7px var(--mono)}

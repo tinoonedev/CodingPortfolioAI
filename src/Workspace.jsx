@@ -57,6 +57,7 @@ function JiraConnectionPanel({ project, canEdit, callbackResult, onCallbackHandl
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState('');
   const [choosing, setChoosing] = useState(false);
+  const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
 
   const loadConnection = useCallback(async () => {
     setConnectionState((current) => ({ ...current, loading: true }));
@@ -159,20 +160,47 @@ function JiraConnectionPanel({ project, canEdit, callbackResult, onCallbackHandl
     }
   };
 
+  const disconnectConnection = async () => {
+    setBusy(true);
+    setError(null);
+    setNotice('Removing Fieldwork’s stored Jira credentials…');
+    try {
+      await api(`/api/projects/${project.id}/jira/disconnect`, { method: 'POST' });
+      const verified = await api(`/api/projects/${project.id}/jira/connection`);
+      if (!['disconnected', 'not_connected'].includes(verified.status)) {
+        throw new Error('Fieldwork could not verify the disconnected state. The connection remains unchanged in this view; reload to check the server.');
+      }
+      setConnectionState({ loading: false, data: verified });
+      setChoosing(false);
+      setConfirmingDisconnect(false);
+      setSearchResults(null);
+      setNotice('Fieldwork removed its stored Jira credentials. The Atlassian account grant may need to be revoked separately in Atlassian.');
+    } catch (requestError) {
+      setError(requestError);
+      await loadConnection();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const connection = connectionState.data?.connection;
   const setup = connectionState.data?.setup;
   const currentPage = searchResults ? Math.floor(searchResults.startAt / searchResults.maxResults) + 1 : 0;
 
   return <section className="jira-connection-panel" aria-labelledby="jira-connection-title">
     <div className="jira-panel-heading"><div><p className="eyebrow">PROJECT INTEGRATION</p><h3 id="jira-connection-title">Jira connection</h3><p>Connect one verified Jira project to this client workspace.</p></div><span className={`jira-status-chip ${connection?.status === 'connected' ? 'is-connected' : ''}`} role="status">{connectionState.loading ? 'Checking…' : connection?.status === 'connected' ? 'Connected' : connection?.status === 'disconnected' ? 'Disconnected' : 'Not connected'}</span></div>
-    {connectionState.data?.configured === false && <div className="jira-setup-notice"><b>Jira OAuth setup required</b><p>Fieldwork will show a connected state only after a real Jira authorization and project verification.</p>{(setup?.missing?.length > 0 || setup?.invalid?.length > 0) && <ul>{[...(setup.missing || []), ...(setup.invalid || [])].map((setting) => <li key={setting}><code>{setting}</code></li>)}</ul>}</div>}
+    {connectionState.data?.configured === false && connection?.status !== 'connected' && <div className="jira-setup-notice"><b>Jira OAuth setup required</b><p>Fieldwork will show a connected state only after a real Jira authorization and project verification.</p>{(setup?.missing?.length > 0 || setup?.invalid?.length > 0) && <ul>{[...(setup.missing || []), ...(setup.invalid || [])].map((setting) => <li key={setting}><code>{setting}</code></li>)}</ul>}</div>}
     {connection?.status === 'connected' && <div className="jira-connected-details"><span><small>JIRA SITE</small><b>{connection.site_url}</b></span><span><small>PROJECT</small><b>{connection.jira_project_key}</b></span></div>}
     {notice && <p className="jira-panel-notice" role="status">{notice}</p>}
     {error && <div className="workspace-alert jira-panel-error" role="alert"><b>{error.message}</b>{((error.missing?.length || 0) > 0 || (error.invalid?.length || 0) > 0) && <ul>{[...(error.missing || []), ...(error.invalid || [])].map((setting) => <li key={setting}><code>{setting}</code></li>)}</ul>}</div>}
     {canEdit && <div className="jira-panel-actions">
       {connection?.status !== 'connected' && <button className="button primary-button" type="button" disabled={busy || connectionState.loading || choosing} onClick={beginAuthorization}>{busy ? 'Working…' : 'Connect Jira'} <span>↗</span></button>}
-      {connection?.status === 'connected' && <button className="button subtle-button" type="button" disabled={busy} onClick={beginAuthorization}>Reconnect Jira</button>}
+      {connection?.status === 'connected' && <><button className="button subtle-button" type="button" disabled={busy} onClick={beginAuthorization}>Reconnect Jira</button><button className="button subtle-button jira-disconnect-trigger" type="button" disabled={busy} onClick={() => { setConfirmingDisconnect(true); setError(null); }}>Disconnect Jira</button></>}
       {!connectionState.data && !connectionState.loading && <button className="button subtle-button" type="button" onClick={() => { setError(null); loadConnection(); }}>Reload status</button>}
+    </div>}
+    {confirmingDisconnect && canEdit && <div className="jira-disconnect-confirm" role="alertdialog" aria-labelledby={`jira-disconnect-title-${project.id}`} aria-describedby={`jira-disconnect-description-${project.id}`}>
+      <div><h4 id={`jira-disconnect-title-${project.id}`}>Disconnect Jira from {project.name}?</h4><p id={`jira-disconnect-description-${project.id}`}>Fieldwork will delete its stored Jira credentials for this project. This does not revoke the Atlassian account grant; manage that separately in Atlassian.</p></div>
+      <div className="jira-disconnect-actions"><button className="button subtle-button" type="button" disabled={busy} onClick={() => setConfirmingDisconnect(false)}>Cancel</button><button className="button primary-button" type="button" autoFocus disabled={busy} onClick={disconnectConnection}>{busy ? 'Disconnecting…' : 'Confirm disconnect'}</button></div>
     </div>}
     {choosing && canEdit && <div className="jira-selection-flow" aria-labelledby="jira-selection-title">
       <h4 id="jira-selection-title">Select a Jira project</h4>

@@ -14,6 +14,7 @@ import {
 import {
   consumeJiraOAuthTransaction,
   createJiraOAuthTransaction,
+  disconnectJiraConnection,
   exchangeJiraAuthorizationCode,
   getJiraConnection,
   purgeExpiredJiraOAuthData,
@@ -729,6 +730,48 @@ export function createWorkspaceApp({ config, pool, jiraOAuthConfig = { configure
       });
     } catch {
       return response.status(503).json({ error: { code: 'WORKSPACE_UNAVAILABLE', message: 'The Jira connection status is temporarily unavailable.' } });
+    }
+  });
+
+  app.post('/api/projects/:projectId/jira/disconnect', requireSession, async (request, response) => {
+    if (!UUID_PATTERN.test(request.params.projectId)) {
+      return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+    }
+    if (request.workspaceSession.role !== 'owner') {
+      return response.status(403).json({ error: { code: 'OWNER_REQUIRED', message: 'Only a workspace owner can disconnect Jira.' } });
+    }
+    let client;
+    try {
+      client = await pool.connect();
+      await client.query('BEGIN');
+      const project = await client.query(
+        'SELECT 1 FROM studio_client_projects WHERE id = $1 AND workspace_id = $2 FOR SHARE',
+        [request.params.projectId, request.workspaceSession.workspace_id],
+      );
+      if (!project.rows[0]) {
+        await client.query('ROLLBACK');
+        return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+      }
+      const disconnected = await disconnectJiraConnection(client, request.workspaceSession.workspace_id, request.params.projectId);
+      if (disconnected) {
+        await client.query(
+          `INSERT INTO studio_audit_events (workspace_id, actor_subject, action, entity_type, entity_id, metadata)
+           VALUES ($1, $2, 'jira.connection_disconnected', 'client_project', $3, '{"localCredentialsDeleted":true,"providerRevocation":"not_documented"}'::jsonb)`,
+          [request.workspaceSession.workspace_id, request.workspaceSession.user_subject, request.params.projectId],
+        );
+      }
+      const connection = await getJiraConnection(client, request.workspaceSession.workspace_id, request.params.projectId);
+      await client.query('COMMIT');
+      return response.json({
+        status: connection?.status || 'not_connected',
+        disconnected: Boolean(disconnected),
+        connection,
+      });
+    } catch {
+      if (client) await client.query('ROLLBACK').catch(() => {});
+      return response.status(503).json({ error: { code: 'JIRA_DISCONNECT_UNAVAILABLE', message: 'The local Jira connection could not be disconnected. No disconnect was confirmed.' } });
+    } finally {
+      client?.release();
     }
   });
 

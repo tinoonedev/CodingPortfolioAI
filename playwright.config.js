@@ -5,6 +5,7 @@ const realWorkspaceIntegration = process.env.WORKSPACE_REAL_INTEGRATION === '1';
 export default defineConfig({
   testDir: './tests/e2e',
   fullyParallel: true,
+  workers: realWorkspaceIntegration ? 1 : undefined,
   forbidOnly: Boolean(process.env.CI),
   preserveOutput: 'never',
   retries: process.env.CI ? 1 : 0,

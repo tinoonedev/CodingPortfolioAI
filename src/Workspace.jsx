@@ -18,6 +18,7 @@ async function api(path, options = {}) {
     error.code = body?.error?.code;
     error.missing = body?.error?.missing || [];
     error.invalid = body?.error?.invalid || [];
+    error.issues = body?.issues || [];
     throw error;
   }
   return body;
@@ -143,16 +144,123 @@ function ProjectForm({ onCreate, busy, error }) {
   </form>;
 }
 
-function ProjectDetails({ project }) {
-  return <section className="workspace-project-detail" aria-labelledby="active-project-title">
-    <div className="workspace-project-heading"><span className="workspace-project-avatar">{project.name.slice(0, 1).toUpperCase()}</span><div><p className="eyebrow">CLIENT PROJECT · SERVER SAVED</p><h2 id="active-project-title">{project.name}</h2><p>{project.client}</p></div><span className="workspace-saved"><i /> Approved · Persisted</span></div>
-    <div className="workspace-brief-grid">
-      <article><small>BUSINESS PROBLEM</small><p>{project.problem}</p></article>
-      <article><small>TARGET USER</small><p>{project.targetUser}</p></article>
-      <article><small>SUCCESS SIGNAL</small><p>{project.successSignal}</p></article>
+function BriefEditor({ project, onCancel, onSave, busy, error }) {
+  const [form, setForm] = useState({
+    name: project.name,
+    client: project.client,
+    problem: project.problem,
+    targetUser: project.targetUser,
+    successSignal: project.successSignal,
+    approved: false,
+  });
+  const update = (field) => (event) => setForm((current) => ({ ...current, [field]: event.target.value }));
+  return <form className="workspace-project-form brief-editor" onSubmit={(event) => { event.preventDefault(); onSave(form); }}>
+    <div className="workspace-form-heading"><span className="workspace-icon form-icon">✎</span><div><p className="eyebrow">UPDATE APPROVED BRIEF</p><h3>Edit project scope.</h3><p>Saving an approved change marks earlier Gherkin revisions as written for a prior brief.</p></div></div>
+    <div className="workspace-fields">
+      <label>Project name<input required maxLength="70" value={form.name} onChange={update('name')} /></label>
+      <label>Client name<input required maxLength="70" value={form.client} onChange={update('client')} /></label>
+      <label className="field-wide">Business problem<textarea required maxLength="500" rows="3" value={form.problem} onChange={update('problem')} /></label>
+      <label>Target user<textarea required maxLength="250" rows="2" value={form.targetUser} onChange={update('targetUser')} /></label>
+      <label>Success signal<textarea required maxLength="250" rows="2" value={form.successSignal} onChange={update('successSignal')} /></label>
     </div>
-    <div className="workspace-project-footer"><span>Created {new Date(project.createdAt).toLocaleDateString()}</span><span>Workspace access checked on every request</span></div>
+    <label className="workspace-brief-approval"><input required type="checkbox" checked={form.approved} onChange={(event) => setForm((current) => ({ ...current, approved: event.target.checked }))} /><span><b>I approve this updated brief.</b><small>The signed-in workspace owner and approval time will be recorded.</small></span></label>
+    {error && <p className="workspace-alert" role="alert">{error}</p>}
+    <div className="workspace-form-actions"><button className="button subtle-button" type="button" onClick={onCancel}>Cancel</button><button className="button primary-button" type="submit" disabled={busy || !form.approved}>{busy ? 'Saving…' : 'Save approved brief'} <span>↗</span></button></div>
+  </form>;
+}
+
+function RequirementsPanel({ project, canEdit }) {
+  const [revisions, setRevisions] = useState([]);
+  const [content, setContent] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [savedMessage, setSavedMessage] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await api(`/api/projects/${project.id}/requirements`);
+      setRevisions(result.revisions);
+    } catch (requestError) {
+      setError(requestError);
+    } finally {
+      setLoading(false);
+    }
+  }, [project.id, project.name, project.client, project.problem, project.targetUser, project.successSignal]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const save = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    setSavedMessage('');
+    try {
+      const result = await api(`/api/projects/${project.id}/requirements`, {
+        method: 'POST',
+        body: JSON.stringify({ content }),
+      });
+      setRevisions((current) => [result.revision, ...current]);
+      setContent('');
+      setSavedMessage(`Revision ${result.revision.revision} saved with ${result.revision.scenarios.length} scenarios. QA review has not been recorded.`);
+    } catch (requestError) {
+      setError(requestError);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return <section className="workspace-requirements" aria-labelledby="requirements-title">
+    <div className="workspace-requirements-heading"><div><p className="eyebrow">BUSINESS ANALYST · GHERKIN</p><h3 id="requirements-title">Requirements revisions</h3><p>Versioned against this project brief. Structural validation does not replace QA review.</p></div><span className="requirements-count">{revisions.length} {revisions.length === 1 ? 'REVISION' : 'REVISIONS'}</span></div>
+    {canEdit && <form className="requirements-editor" onSubmit={save}>
+      <label htmlFor="gherkin-requirements-content">Gherkin feature</label>
+      <textarea id="gherkin-requirements-content" data-testid="gherkin-requirements-content" maxLength="60000" rows="14" required value={content} onChange={(event) => setContent(event.target.value)} placeholder={'Feature: Describe the capability\n  As a specific actor\n  I want an observable capability\n  So that a measurable outcome is reached\n\n  Rule: Describe the policy\n    Scenario: Describe one outcome\n      Given explicit preconditions\n      When the actor takes one action\n      Then the system shows one result\n\n    Scenario: Describe a meaningful failure\n      Given the failure condition\n      When the action is attempted\n      Then the safe failure is visible'} />
+      <div className="requirements-editor-footer"><span>Gherkin is parsed on the server. Invalid text is not saved as reviewable.</span><button className="button primary-button" type="submit" disabled={busy || loading}>{busy ? 'Validating…' : 'Validate and save revision'} <span>↗</span></button></div>
+    </form>}
+    {error && <div className="workspace-alert requirements-error" role="alert"><b>{error.message}</b>{error.issues.length > 0 && <ul>{error.issues.map((problem, index) => <li key={`${problem.code}-${index}`}>{problem.line ? `Line ${problem.line}: ` : ''}{problem.message}</li>)}</ul>}<button className="requirements-retry" type="button" onClick={load}>Reload revisions</button></div>}
+    {savedMessage && <p className="requirements-saved" role="status">{savedMessage}</p>}
+    {loading ? <p className="requirements-empty" role="status">Loading saved revisions…</p> : revisions.length === 0 ? <p className="requirements-empty">No Gherkin revision has been saved for this project.</p> : <ol className="requirements-history">{revisions.map((revision) => <li key={revision.id}>
+      <details>
+        <summary><span><b>Revision {revision.revision}</b><small>{revision.scenarios.length} scenarios · {new Date(revision.createdAt).toLocaleString()}</small></span><span className={revision.briefChanged ? 'revision-stale' : 'revision-current'}>{revision.briefChanged ? 'PRIOR BRIEF' : 'CURRENT BRIEF'}</span></summary>
+        {revision.briefChanged && <p className="revision-warning">This revision was saved for a prior brief. It remains in history and needs review against the current brief.</p>}
+        <pre>{revision.content}</pre>
+        <ul className="revision-scenarios">{revision.scenarios.map((scenario) => <li key={scenario.id}><code>{scenario.id}</code><span>{scenario.type}: {scenario.name}</span>{scenario.tags.map((tag) => <small key={tag}>{tag}</small>)}</li>)}</ul>
+      </details>
+    </li>)}</ol>}
   </section>;
+}
+
+function ProjectDetails({ project, canEdit, onSaveBrief }) {
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const saveBrief = async (form) => {
+    setBusy(true);
+    setError('');
+    try {
+      await onSaveBrief(project.id, form);
+      setEditing(false);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return <div className="workspace-project-stack">
+    <section className="workspace-project-detail" aria-labelledby="active-project-title">
+      <div className="workspace-project-heading"><span className="workspace-project-avatar">{project.name.slice(0, 1).toUpperCase()}</span><div><p className="eyebrow">CLIENT PROJECT · SERVER SAVED</p><h2 id="active-project-title">{project.name}</h2><p>{project.client}</p></div><span className="workspace-saved"><i /> Approved · Persisted</span></div>
+      <div className="workspace-brief-grid">
+        <article><small>BUSINESS PROBLEM</small><p>{project.problem}</p></article>
+        <article><small>TARGET USER</small><p>{project.targetUser}</p></article>
+        <article><small>SUCCESS SIGNAL</small><p>{project.successSignal}</p></article>
+      </div>
+      <div className="workspace-project-footer"><span>Created {new Date(project.createdAt).toLocaleDateString()}</span><span>Workspace access checked on every request</span>{canEdit && <button className="workspace-edit-brief" type="button" onClick={() => { setEditing(true); setError(''); }}>Edit approved brief</button>}</div>
+    </section>
+    {editing && <BriefEditor project={project} onCancel={() => setEditing(false)} onSave={saveBrief} busy={busy} error={error} />}
+    <RequirementsPanel key={project.id} project={project} canEdit={canEdit} />
+  </div>;
 }
 
 export default function Workspace() {
@@ -194,6 +302,11 @@ export default function Workspace() {
     }
   };
 
+  const saveProjectBrief = async (projectId, form) => {
+    const { project } = await api(`/api/projects/${projectId}`, { method: 'PUT', body: JSON.stringify(form) });
+    setState((current) => ({ ...current, projects: current.projects.map((item) => item.id === projectId ? project : item) }));
+  };
+
   const signOut = async () => {
     try {
       await api('/api/auth/logout', { method: 'POST' });
@@ -225,7 +338,7 @@ export default function Workspace() {
           {state.projects.length === 0 && <p className="workspace-empty-list">Your first client project will appear here.</p>}
         </aside>
         <div className="workspace-main-panel">
-          {selectedProject ? <ProjectDetails project={selectedProject} /> : <ProjectForm onCreate={createProject} busy={busy} error={formError} />}
+          {selectedProject ? <ProjectDetails project={selectedProject} canEdit={state.session.user.role === 'owner'} onSaveBrief={saveProjectBrief} /> : <ProjectForm onCreate={createProject} busy={busy} error={formError} />}
           {selectedProject && <button className="workspace-add-project" type="button" onClick={() => setState((current) => ({ ...current, selectedId: null }))}>＋ Add a client project</button>}
         </div>
       </div>

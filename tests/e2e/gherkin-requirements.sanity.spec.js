@@ -69,7 +69,7 @@ test('owner saves Gherkin revisions, receives parser feedback, and sees brief ch
     const editor = page.getByLabel('Gherkin feature');
     await editor.fill(validGherkin);
     await page.getByRole('button', { name: 'Validate and save revision' }).click();
-    await expect(page.getByRole('status')).toContainText('Revision 1 saved with 1 scenarios');
+    await expect(page.locator('.requirements-saved')).toContainText('Revision 1 saved with 1 scenarios');
     await expect(page.getByText('QA review has not been recorded.')).toBeVisible();
     await page.locator('.requirements-history details summary').first().click();
     await expect(page.getByText('scenario-', { exact: false })).toBeVisible();
@@ -136,7 +136,7 @@ test('owner saves Gherkin revisions, receives parser feedback, and sees brief ch
 
     await editor.fill(validGherkin.replace('complete revision', 'second revision'));
     await page.getByRole('button', { name: 'Validate and save revision' }).click();
-    await expect(page.getByRole('status')).toContainText('Revision 2 saved with 1 scenarios');
+    await expect(page.locator('.requirements-saved')).toContainText('Revision 2 saved with 1 scenarios');
     const finalState = await page.context().request.get(`/api/projects/${projectId}/requirements`);
     const revisions = (await finalState.json()).revisions;
     expect(revisions.map((revision) => revision.revision)).toEqual([2, 1]);

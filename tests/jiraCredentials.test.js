@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import {
+  buildJiraAuthorizationUrl,
   decryptJiraTokenBundle,
   encryptJiraTokenBundle,
   readJiraOAuthConfig,
@@ -59,4 +60,24 @@ test('rejects invalid redirect, malformed keyring, and unexpected token fields',
   assert.deepEqual(config.invalid.sort(), ['JIRA_OAUTH_REDIRECT_URI', 'JIRA_TOKEN_ENCRYPTION_KEYRING']);
   assert.throws(() => encryptJiraTokenBundle({ ...bundle, clientSecret: 'must-not-be-stored' }, context, makeKeyring('key-1', { 'key-1': keyA })), /unsupported field/);
   assert.throws(() => encryptJiraTokenBundle({ ...bundle, expiresAt: 123 }, context, makeKeyring('key-1', { 'key-1': keyA })), /expiry/);
+});
+
+
+test('builds the official Atlassian authorization URL with only the approved scopes', () => {
+  const state = randomBytes(32).toString('base64url');
+  const url = new URL(buildJiraAuthorizationUrl({
+    clientId: 'client-id',
+    redirectUri: 'https://fieldwork.example/api/integrations/jira/callback',
+    state,
+  }));
+  assert.equal(url.origin, 'https://auth.atlassian.com');
+  assert.equal(url.pathname, '/authorize');
+  assert.equal(url.searchParams.get('audience'), 'api.atlassian.com');
+  assert.equal(url.searchParams.get('client_id'), 'client-id');
+  assert.equal(url.searchParams.get('redirect_uri'), 'https://fieldwork.example/api/integrations/jira/callback');
+  assert.equal(url.searchParams.get('state'), state);
+  assert.equal(url.searchParams.get('response_type'), 'code');
+  assert.equal(url.searchParams.get('prompt'), 'consent');
+  assert.deepEqual(url.searchParams.get('scope').split(' '), ['read:jira-work', 'write:jira-work', 'offline_access']);
+  assert.throws(() => buildJiraAuthorizationUrl({ clientId: 'id', redirectUri: 'https://fieldwork.example/callback', state: 'predictable' }), /Valid Jira OAuth/);
 });

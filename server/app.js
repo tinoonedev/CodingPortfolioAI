@@ -11,7 +11,14 @@ import {
   orderWorkPlanTasks,
   validateJiraWorkPlan,
 } from '../src/domain/jiraWorkPlan.js';
-import { getJiraConnection } from './jiraCredentials.js';
+import {
+  consumeJiraOAuthTransaction,
+  createJiraOAuthTransaction,
+  exchangeJiraAuthorizationCode,
+  getJiraConnection,
+  purgeExpiredJiraOAuthData,
+  storePendingJiraAuthorization,
+} from './jiraCredentials.js';
 
 const SESSION_SECONDS = 60 * 60 * 12;
 const INVITE_SECONDS = 60 * 60 * 24;
@@ -514,6 +521,93 @@ export function createWorkspaceApp({ config, pool, jiraOAuthConfig = { configure
       return response.json({ project: toProject(result.rows[0]) });
     } catch {
       return response.status(503).json({ error: { code: 'WORKSPACE_UNAVAILABLE', message: 'The workspace service is temporarily unavailable.' } });
+    }
+  });
+
+  app.post('/api/projects/:projectId/jira/authorization', requireSession, async (request, response) => {
+    if (!UUID_PATTERN.test(request.params.projectId)) {
+      return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+    }
+    if (request.workspaceSession.role !== 'owner') {
+      return response.status(403).json({ error: { code: 'OWNER_REQUIRED', message: 'Only a workspace owner can authorize a Jira connection.' } });
+    }
+    try {
+      const project = await pool.query(
+        'SELECT 1 FROM studio_client_projects WHERE id = $1 AND workspace_id = $2',
+        [request.params.projectId, request.workspaceSession.workspace_id],
+      );
+      if (!project.rows[0]) {
+        return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+      }
+    } catch {
+      return response.status(503).json({ error: { code: 'WORKSPACE_UNAVAILABLE', message: 'The workspace service is temporarily unavailable.' } });
+    }
+    if (jiraOAuthConfig.configured !== true) {
+      return response.status(503).json({
+        error: {
+          code: 'JIRA_SETUP_REQUIRED',
+          message: 'Jira OAuth is not configured on this Fieldwork server.',
+          missing: jiraOAuthConfig.missing || [],
+          invalid: jiraOAuthConfig.invalid || [],
+        },
+      });
+    }
+    const sessionToken = cookieValue(request, config.cookieName);
+    if (!sessionToken) return response.status(401).json({ error: { code: 'AUTH_REQUIRED', message: 'Sign in to authorize Jira.' } });
+    try {
+      await purgeExpiredJiraOAuthData(pool);
+      const transaction = await createJiraOAuthTransaction(pool, {
+        workspaceId: request.workspaceSession.workspace_id,
+        projectId: request.params.projectId,
+        userSubject: request.workspaceSession.user_subject,
+        sessionTokenHash: sha256(sessionToken),
+      }, jiraOAuthConfig);
+      return response.status(201).json(transaction);
+    } catch (error) {
+      if (error?.message === 'The project is not available to this workspace owner.') {
+        return response.status(404).json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Project not found.' } });
+      }
+      return response.status(503).json({ error: { code: 'JIRA_AUTHORIZATION_UNAVAILABLE', message: 'Jira authorization could not be started.' } });
+    }
+  });
+
+  app.get('/api/integrations/jira/callback', requireSession, async (request, response) => {
+    if (request.workspaceSession.role !== 'owner') {
+      return response.status(403).json({ error: { code: 'OWNER_REQUIRED', message: 'Only a workspace owner can complete Jira authorization.' } });
+    }
+    const state = typeof request.query.state === 'string' ? request.query.state : '';
+    const code = typeof request.query.code === 'string' ? request.query.code : '';
+    const providerError = typeof request.query.error === 'string' ? request.query.error : '';
+    const sessionToken = cookieValue(request, config.cookieName);
+    if (!sessionToken || !state) {
+      return response.status(400).json({ error: { code: 'JIRA_CALLBACK_INVALID', message: 'The Jira authorization response is invalid or expired. Start authorization again.' } });
+    }
+    try {
+      const transaction = await consumeJiraOAuthTransaction(pool, { state, sessionTokenHash: sha256(sessionToken) });
+      if (!transaction) {
+        return response.status(400).json({ error: { code: 'JIRA_CALLBACK_INVALID', message: 'The Jira authorization response is invalid, expired, or already used. Start authorization again.' } });
+      }
+      if (providerError || !code) {
+        return response.status(400).json({ error: { code: 'JIRA_AUTHORIZATION_DENIED', message: 'Jira authorization was denied or did not return a code.' } });
+      }
+      if (jiraOAuthConfig.configured !== true) {
+        return response.status(503).json({ error: { code: 'JIRA_SETUP_REQUIRED', message: 'Jira OAuth is not configured on this Fieldwork server.' } });
+      }
+      const tokenBundle = await exchangeJiraAuthorizationCode(code, jiraOAuthConfig);
+      await storePendingJiraAuthorization(pool, {
+        workspaceId: transaction.workspace_id,
+        projectId: transaction.project_id,
+        userSubject: transaction.user_subject,
+        sessionTokenHash: transaction.session_token_hash,
+      }, tokenBundle, jiraOAuthConfig.keyring);
+      return response.json({ status: 'authorization_received', projectId: transaction.project_id, siteAndProjectSelectionRequired: true });
+    } catch (error) {
+      const message = error?.message === 'Atlassian token exchange is unavailable.'
+        ? 'Atlassian could not be reached. Start Jira authorization again.'
+        : error?.message === 'Atlassian rejected the Jira authorization code.'
+          ? 'Atlassian rejected this authorization code. Start Jira authorization again.'
+          : 'Jira authorization could not be completed. Start again; no connection was created.';
+      return response.status(502).json({ error: { code: 'JIRA_AUTHORIZATION_FAILED', message } });
     }
   });
 

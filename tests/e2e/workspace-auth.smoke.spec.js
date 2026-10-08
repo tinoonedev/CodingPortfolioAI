@@ -123,6 +123,15 @@ test('invited accounts persist workspace projects and cannot read another worksp
     expect(jiraStatusBody.configured).toBe(false);
     expect(jiraStatusBody.connection).toBeNull();
     expect(JSON.stringify(jiraStatusBody)).not.toMatch(/clientSecret|accessToken|refreshToken|ciphertext|private-client/i);
+    const jiraAuthorizationStart = await page.context().request.post(`/api/projects/${projectBefore.id}/jira/authorization`, { headers: { origin: 'http://127.0.0.1:4173' } });
+    expect(jiraAuthorizationStart.status()).toBe(503);
+    const jiraSetup = await jiraAuthorizationStart.json();
+    expect(jiraSetup.error.code).toBe('JIRA_SETUP_REQUIRED');
+    expect(jiraSetup.error.missing).toContain('JIRA_OAUTH_CLIENT_ID');
+    expect(JSON.stringify(jiraSetup)).not.toMatch(/clientSecret|accessToken|refreshToken|ciphertext/i);
+    const invalidJiraCallback = await page.context().request.get(`/api/integrations/jira/callback?state=${randomBytes(32).toString('base64url')}&code=unused`);
+    expect(invalidJiraCallback.status()).toBe(400);
+    expect((await invalidJiraCallback.json()).error.code).toBe('JIRA_CALLBACK_INVALID');
 
     await page.getByRole('button', { name: 'Sign out' }).click();
     await expect(page.getByRole('heading', { name: 'Your studio starts here.' })).toBeVisible();

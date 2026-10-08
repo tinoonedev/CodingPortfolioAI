@@ -1,6 +1,9 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 
 const CALLBACK_PATH = '/api/integrations/jira/callback';
+const JIRA_AUTHORIZATION_ENDPOINT = 'https://auth.atlassian.com/authorize';
+const JIRA_TOKEN_ENDPOINT = 'https://auth.atlassian.com/oauth/token';
+export const JIRA_OAUTH_SCOPES = Object.freeze(['read:jira-work', 'write:jira-work', 'offline_access']);
 const KEY_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 const ENVELOPE_FIELDS = new Set(['version', 'keyId', 'iv', 'ciphertext', 'tag']);
 const TOKEN_FIELDS = new Set(['accessToken', 'refreshToken', 'expiresAt', 'scopes']);
@@ -225,4 +228,178 @@ export async function disconnectJiraConnection(pool, workspaceId, projectId) {
     [workspaceId, projectId],
   );
   return result.rows[0] || null;
+}
+
+
+const hashState = (value) => createHash('sha256').update(value).digest('hex');
+
+export function buildJiraAuthorizationUrl({ clientId, redirectUri, state }) {
+  if (typeof clientId !== 'string' || !clientId || typeof redirectUri !== 'string' || !redirectUri || typeof state !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(state)) {
+    throw new TypeError('Valid Jira OAuth client, callback, and state are required.');
+  }
+  const url = new URL(JIRA_AUTHORIZATION_ENDPOINT);
+  url.searchParams.set('audience', 'api.atlassian.com');
+  url.searchParams.set('client_id', clientId);
+  url.searchParams.set('scope', JIRA_OAUTH_SCOPES.join(' '));
+  url.searchParams.set('redirect_uri', redirectUri);
+  url.searchParams.set('state', state);
+  url.searchParams.set('response_type', 'code');
+  url.searchParams.set('prompt', 'consent');
+  return url.toString();
+}
+
+export async function createJiraOAuthTransaction(pool, context, oauthConfig) {
+  const { workspaceId, projectId, userSubject, sessionTokenHash } = context || {};
+  if (![workspaceId, projectId, userSubject, sessionTokenHash].every((value) => typeof value === 'string' && value.trim())) {
+    throw new TypeError('An authenticated owner session and project scope are required.');
+  }
+  if (oauthConfig?.configured !== true) throw new Error('Jira OAuth is not configured.');
+  const state = randomBytes(32).toString('base64url');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM studio_jira_pending_authorizations WHERE workspace_id = $1 AND project_id = $2', [workspaceId, projectId]);
+    const result = await client.query(
+      `INSERT INTO studio_jira_oauth_transactions
+         (state_hash, workspace_id, project_id, user_subject, session_token_hash, expires_at)
+       SELECT $1, p.workspace_id, p.id, m.user_subject, $4, now() + interval '10 minutes'
+       FROM studio_client_projects p
+       JOIN studio_workspace_members m ON m.workspace_id = p.workspace_id AND m.user_subject = $3 AND m.role = 'owner'
+       WHERE p.workspace_id = $2 AND p.id = $5
+       ON CONFLICT (workspace_id, project_id, session_token_hash) DO UPDATE SET
+         state_hash = EXCLUDED.state_hash, user_subject = EXCLUDED.user_subject,
+         created_at = now(), expires_at = EXCLUDED.expires_at`,
+      [hashState(state), workspaceId, userSubject, sessionTokenHash, projectId],
+    );
+    if (result.rowCount !== 1) throw new Error('The project is not available to this workspace owner.');
+    await client.query(
+      `INSERT INTO studio_audit_events (workspace_id, actor_subject, action, entity_type, entity_id, metadata)
+       VALUES ($1, $2, 'jira.authorization_started', 'client_project', $3, '{"scope":"pending_site_project_selection"}'::jsonb)`,
+      [workspaceId, userSubject, projectId],
+    );
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+  return { state, authorizationUrl: buildJiraAuthorizationUrl({ clientId: oauthConfig.clientId, redirectUri: oauthConfig.redirectUri, state }) };
+}
+
+export async function consumeJiraOAuthTransaction(pool, { state, sessionTokenHash }) {
+  if (typeof state !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(state) || typeof sessionTokenHash !== 'string') return null;
+  const result = await pool.query(
+    `DELETE FROM studio_jira_oauth_transactions
+     WHERE state_hash = $1 AND session_token_hash = $2 AND expires_at > now()
+     RETURNING workspace_id, project_id, user_subject, session_token_hash`,
+    [hashState(state), sessionTokenHash],
+  );
+  return result.rows[0] || null;
+}
+
+export async function exchangeJiraAuthorizationCode(code, oauthConfig) {
+  if (typeof code !== 'string' || !code || code.length > 4096 || oauthConfig?.configured !== true) {
+    throw new Error('Jira authorization code exchange could not be started.');
+  }
+  let response;
+  try {
+    response = await fetch(JIRA_TOKEN_ENDPOINT, {
+      method: 'POST',
+      redirect: 'error',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'authorization_code',
+        client_id: oauthConfig.clientId,
+        client_secret: oauthConfig.clientSecret,
+        code,
+        redirect_uri: oauthConfig.redirectUri,
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch {
+    throw new Error('Atlassian token exchange is unavailable.');
+  }
+  if (!response.ok) throw new Error('Atlassian rejected the Jira authorization code.');
+  if (!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type') || '')) throw new Error('Atlassian returned an invalid token response.');
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('Atlassian returned an invalid token response.');
+  const responseChunks = [];
+  let responseSize = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      responseSize += value.byteLength;
+      if (responseSize > 65_536) {
+        await reader.cancel();
+        throw new Error('Atlassian returned an invalid token response.');
+      }
+      responseChunks.push(Buffer.from(value));
+    }
+  } catch {
+    throw new Error('Atlassian returned an invalid token response.');
+  }
+  const bodyText = Buffer.concat(responseChunks).toString('utf8');
+  let body;
+  try { body = JSON.parse(bodyText); } catch { throw new Error('Atlassian returned an invalid token response.'); }
+  const scopes = typeof body.scope === 'string' ? [...new Set(body.scope.split(/\s+/).filter(Boolean))] : [];
+  const requiredScopes = JIRA_OAUTH_SCOPES;
+  if (typeof body.access_token !== 'string' || !body.access_token || typeof body.refresh_token !== 'string' || !body.refresh_token || !Number.isInteger(body.expires_in) || body.expires_in < 1 || body.expires_in > 31_536_000 || requiredScopes.some((scope) => !scopes.includes(scope))) {
+    throw new Error('Atlassian returned an incomplete Jira authorization grant.');
+  }
+  return {
+    accessToken: body.access_token,
+    refreshToken: body.refresh_token,
+    expiresAt: new Date(Date.now() + body.expires_in * 1000).toISOString(),
+    scopes,
+  };
+}
+
+export async function storePendingJiraAuthorization(pool, context, tokenBundle, keyring) {
+  const { workspaceId, projectId, userSubject, sessionTokenHash } = context || {};
+  if (![workspaceId, projectId, userSubject, sessionTokenHash].every((value) => typeof value === 'string' && value.trim())) {
+    throw new TypeError('An authenticated owner session and project scope are required.');
+  }
+  const envelope = encryptJiraTokenBundle(tokenBundle, { workspaceId, projectId }, keyring);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      `INSERT INTO studio_jira_pending_authorizations
+         (id, workspace_id, project_id, user_subject, session_token_hash, encrypted_credentials, credential_key_id, granted_scopes, expires_at)
+       SELECT gen_random_uuid(), p.workspace_id, p.id, m.user_subject, $4, $5::jsonb, $6, $7::text[], now() + interval '10 minutes'
+       FROM studio_client_projects p
+       JOIN studio_workspace_members m ON m.workspace_id = p.workspace_id AND m.user_subject = $3 AND m.role = 'owner'
+       WHERE p.workspace_id = $1 AND p.id = $2
+       ON CONFLICT (workspace_id, project_id) DO UPDATE SET
+         user_subject = EXCLUDED.user_subject,
+         session_token_hash = EXCLUDED.session_token_hash,
+         encrypted_credentials = EXCLUDED.encrypted_credentials,
+         credential_key_id = EXCLUDED.credential_key_id,
+         granted_scopes = EXCLUDED.granted_scopes,
+         expires_at = EXCLUDED.expires_at,
+         created_at = now()
+       RETURNING project_id, expires_at`,
+      [workspaceId, projectId, userSubject, sessionTokenHash, JSON.stringify(envelope), envelope.keyId, tokenBundle.scopes],
+    );
+    if (!result.rows[0]) throw new Error('The project is not available to this workspace owner.');
+    await client.query(
+      `INSERT INTO studio_audit_events (workspace_id, actor_subject, action, entity_type, entity_id, metadata)
+       VALUES ($1, $2, 'jira.authorization_received', 'client_project', $3, '{"scope":"pending_site_project_selection"}'::jsonb)`,
+      [workspaceId, userSubject, projectId],
+    );
+    await client.query('COMMIT');
+    return result.rows[0];
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function purgeExpiredJiraOAuthData(pool) {
+  await pool.query('DELETE FROM studio_jira_oauth_transactions WHERE expires_at <= now()');
+  await pool.query('DELETE FROM studio_jira_pending_authorizations WHERE expires_at <= now()');
 }

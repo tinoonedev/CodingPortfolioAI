@@ -22,6 +22,7 @@ if (!connectionString || (process.env.NODE_ENV === 'production' && process.env.D
     const jiraOAuthTransactionLimitMigration = await readFile(new URL('./migrations/007_jira_oauth_transaction_session_limit.sql', import.meta.url), 'utf8');
     const openAiProjectRunsMigration = await readFile(new URL('./migrations/008_openai_project_runs.sql', import.meta.url), 'utf8');
     const openAiConfigMemberLifecycleMigration = await readFile(new URL('./migrations/009_openai_config_member_lifecycle.sql', import.meta.url), 'utf8');
+    const idempotentClientProjectCreationMigration = await readFile(new URL('./migrations/013_idempotent_client_project_creation.sql', import.meta.url), 'utf8');
     await pool.query(`CREATE TABLE IF NOT EXISTS fieldwork_schema_migrations (
       version INTEGER PRIMARY KEY,
       applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -163,8 +164,23 @@ if (!connectionString || (process.env.NODE_ENV === 'production' && process.env.D
       }
       console.log('Workspace database migration 9 applied.');
     }
+    if (!versions.has(13)) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(idempotentClientProjectCreationMigration);
+        await client.query('INSERT INTO fieldwork_schema_migrations (version) VALUES ($1)', [13]);
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
+      } finally {
+        client.release();
+      }
+      console.log('Workspace database migration 13 applied.');
+    }
     const current = await pool.query('SELECT version FROM fieldwork_schema_migrations ORDER BY version');
-    if ([1, 2, 3, 4, 5, 6, 7, 8, 9].every((version) => new Set(current.rows.map((row) => row.version)).has(version))) {
+    if ([1, 2, 3, 4, 5, 6, 7, 8, 9, 13].every((version) => new Set(current.rows.map((row) => row.version)).has(version))) {
       console.log('Workspace database schema is current.');
     }
   } catch {

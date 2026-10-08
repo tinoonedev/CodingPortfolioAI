@@ -60,10 +60,10 @@ export function readRuntimeConfig(env = process.env) {
 
 export function validateClientProject(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
-    return { valid: false, error: 'Project details must be an object.' };
+    return { valid: false, field: null, error: 'Project details must be an object.' };
   }
   if (input.approved !== true) {
-    return { valid: false, error: 'The project brief must be explicitly approved before it is saved.' };
+    return { valid: false, field: 'approved', error: 'The project brief must be explicitly approved before it is saved.' };
   }
 
   const limits = {
@@ -78,12 +78,12 @@ export function validateClientProject(input) {
   for (const [field, maxLength] of Object.entries(limits)) {
     const value = input[field];
     if (typeof value !== 'string') {
-      return { valid: false, error: `${field} must be text.` };
+      return { valid: false, field, error: `${field} must be text.` };
     }
     const trimmed = value.trim();
-    if (!trimmed) return { valid: false, error: `${field} is required.` };
+    if (!trimmed) return { valid: false, field, error: `${field} is required.` };
     if (trimmed.length > maxLength) {
-      return { valid: false, error: `${field} must be ${maxLength} characters or fewer.` };
+      return { valid: false, field, error: `${field} must be ${maxLength} characters or fewer.` };
     }
     project[field] = trimmed;
   }

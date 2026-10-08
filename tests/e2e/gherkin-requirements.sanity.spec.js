@@ -48,7 +48,7 @@ test('owner saves Gherkin revisions, receives parser feedback, and sees brief ch
     await page.getByLabel('Business problem').fill('The owner needs versioned requirements.');
     await page.getByLabel('Target user').fill('Workspace owner');
     await page.getByLabel('Success signal').fill('A saved revision can be read back.');
-    await page.getByLabel('I reviewed and approve this brief for the workspace.').check();
+    await page.getByLabel('I approve saving this client brief.').check();
     await page.getByRole('button', { name: 'Create client project' }).click();
     await expect(page.getByRole('heading', { name: /Gherkin E2E/ })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Requirements revisions' })).toBeVisible();

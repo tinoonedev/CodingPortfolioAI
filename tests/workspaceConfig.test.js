@@ -77,9 +77,24 @@ test('client project validation trims values and enforces each field limit', () 
     approved: true,
   });
   assert.equal(invalid.valid, false);
+  assert.equal(invalid.field, 'name');
   assert.match(invalid.error, /70 characters/);
   assert.equal(validateClientProject([]).valid, false);
-  assert.match(validateClientProject({ name: 'x' }).error, /explicitly approved/);
+  const unapproved = validateClientProject({ name: 'x' });
+  assert.equal(unapproved.field, 'approved');
+  assert.match(unapproved.error, /explicitly approved/);
+
+  const whitespace = validateClientProject({
+    name: 'Project', client: 'Client', problem: '  \t ', targetUser: 'User', successSignal: 'Signal', approved: true,
+  });
+  assert.equal(whitespace.field, 'problem');
+  assert.match(whitespace.error, /problem is required/);
+
+  const boundary = validateClientProject({
+    name: 'n'.repeat(70), client: 'c'.repeat(70), problem: 'p'.repeat(500),
+    targetUser: 'u'.repeat(250), successSignal: 's'.repeat(250), approved: true,
+  });
+  assert.equal(boundary.valid, true);
 });
 
 test('real HTTP API fails closed when workspace integrations are unconfigured', async (context) => {

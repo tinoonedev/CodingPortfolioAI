@@ -81,6 +81,8 @@ function toProject(row) {
     targetUser: row.target_user,
     successSignal: row.success_signal,
     briefApprovedAt: row.brief_approved_at,
+    briefApprovedBy: row.approver_display_name || 'Workspace member',
+    creationRequestId: row.creation_request_id || null,
     createdAt: row.created_at,
   };
 }
@@ -424,8 +426,14 @@ export function createWorkspaceApp({ config, pool, jiraOAuthConfig = { configure
   app.get('/api/projects', requireSession, async (request, response) => {
     try {
       const result = await pool.query(
-        `SELECT id, name, client, problem, target_user, success_signal, brief_approved_at, created_at
-         FROM studio_client_projects WHERE workspace_id = $1 ORDER BY created_at DESC`,
+        `SELECT p.id, p.name, p.client, p.problem, p.target_user, p.success_signal,
+                p.brief_approved_at, p.creation_request_id, p.created_at,
+                approver.display_name AS approver_display_name
+         FROM studio_client_projects p
+         LEFT JOIN studio_workspace_members approver_member
+           ON approver_member.workspace_id = p.workspace_id AND approver_member.user_subject = p.brief_approved_by
+         LEFT JOIN studio_users approver ON approver.subject = approver_member.user_subject
+         WHERE p.workspace_id = $1 ORDER BY p.created_at DESC`,
         [request.workspaceSession.workspace_id],
       );
       return response.json({ projects: result.rows.map(toProject) });
@@ -437,19 +445,33 @@ export function createWorkspaceApp({ config, pool, jiraOAuthConfig = { configure
   app.post('/api/projects', requireSession, async (request, response) => {
     const validated = validateClientProject(request.body);
     if (!validated.valid) {
-      return response.status(400).json({ error: { code: 'INVALID_PROJECT', message: validated.error } });
+      return response.status(400).json({ error: { code: 'INVALID_PROJECT', message: validated.error, field: validated.field } });
+    }
+    const creationRequestId = request.body?.creationRequestId;
+    if (typeof creationRequestId !== 'string' || !UUID_PATTERN.test(creationRequestId)) {
+      return response.status(400).json({ error: { code: 'INVALID_CREATION_REQUEST_ID', message: 'A valid creation request identifier is required.', field: 'creationRequestId' } });
     }
 
     const projectId = randomUUID();
+    const creationRequestDigest = sha256(JSON.stringify([
+      validated.project.name,
+      validated.project.client,
+      validated.project.problem,
+      validated.project.targetUser,
+      validated.project.successSignal,
+    ]));
     let client;
     try {
       client = await pool.connect();
       await client.query('BEGIN');
       const insert = await client.query(
         `INSERT INTO studio_client_projects
-           (id, workspace_id, created_by, name, client, problem, target_user, success_signal, brief_approved_at, brief_approved_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), $3)
-         RETURNING id, name, client, problem, target_user, success_signal, brief_approved_at, created_at`,
+           (id, workspace_id, created_by, name, client, problem, target_user, success_signal,
+            brief_approved_at, brief_approved_by, creation_request_id, creation_request_digest)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), $3, $9, $10)
+         ON CONFLICT (workspace_id, creation_request_id) DO NOTHING
+         RETURNING id, name, client, problem, target_user, success_signal, brief_approved_at,
+                   brief_approved_by, creation_request_id, created_at`,
         [
           projectId,
           request.workspaceSession.workspace_id,
@@ -459,15 +481,40 @@ export function createWorkspaceApp({ config, pool, jiraOAuthConfig = { configure
           validated.project.problem,
           validated.project.targetUser,
           validated.project.successSignal,
+          creationRequestId,
+          creationRequestDigest,
         ],
       );
+      if (!insert.rows[0]) {
+        const existing = await client.query(
+          `SELECT p.id, p.name, p.client, p.problem, p.target_user, p.success_signal,
+                  p.brief_approved_at, p.brief_approved_by, p.creation_request_id,
+                  p.creation_request_digest, p.created_at, approver.display_name AS approver_display_name
+           FROM studio_client_projects p
+           LEFT JOIN studio_workspace_members approver_member
+             ON approver_member.workspace_id = p.workspace_id AND approver_member.user_subject = p.brief_approved_by
+           LEFT JOIN studio_users approver ON approver.subject = approver_member.user_subject
+           WHERE p.workspace_id = $1 AND p.creation_request_id = $2`,
+          [request.workspaceSession.workspace_id, creationRequestId],
+        );
+        if (!existing.rows[0]) {
+          await client.query('ROLLBACK');
+          return response.status(503).json({ error: { code: 'PROJECT_OUTCOME_UNCONFIRMED', message: 'The project outcome is not yet confirmed. Check the saved project list before retrying.' } });
+        }
+        if (existing.rows[0].creation_request_digest.trim() !== creationRequestDigest) {
+          await client.query('ROLLBACK');
+          return response.status(409).json({ error: { code: 'CREATION_REQUEST_ID_REUSED', message: 'This creation request identifier is already bound to different brief content.', field: 'creationRequestId' } });
+        }
+        await client.query('COMMIT');
+        return response.status(200).json({ project: toProject(existing.rows[0]), deduplicated: true });
+      }
       await client.query(
         `INSERT INTO studio_audit_events (workspace_id, actor_subject, action, entity_type, entity_id)
          VALUES ($1, $2, 'client_project.created', 'client_project', $3)`,
         [request.workspaceSession.workspace_id, request.workspaceSession.user_subject, projectId],
       );
       await client.query('COMMIT');
-      return response.status(201).json({ project: toProject(insert.rows[0]) });
+      return response.status(201).json({ project: toProject({ ...insert.rows[0], approver_display_name: request.workspaceSession.display_name }) });
     } catch {
       if (client) await client.query('ROLLBACK').catch(() => {});
       return response.status(503).json({ error: { code: 'WORKSPACE_UNAVAILABLE', message: 'The project could not be saved. Try again after the workspace is available.' } });
@@ -485,7 +532,7 @@ export function createWorkspaceApp({ config, pool, jiraOAuthConfig = { configure
     }
     const validated = validateClientProject(request.body);
     if (!validated.valid) {
-      return response.status(400).json({ error: { code: 'INVALID_PROJECT', message: validated.error } });
+      return response.status(400).json({ error: { code: 'INVALID_PROJECT', message: validated.error, field: validated.field } });
     }
 
     let client;
@@ -497,7 +544,8 @@ export function createWorkspaceApp({ config, pool, jiraOAuthConfig = { configure
            name = $3, client = $4, problem = $5, target_user = $6, success_signal = $7,
            brief_approved_at = now(), brief_approved_by = $8, updated_at = now()
          WHERE id = $1 AND workspace_id = $2
-         RETURNING id, name, client, problem, target_user, success_signal, brief_approved_at, created_at`,
+         RETURNING id, name, client, problem, target_user, success_signal, brief_approved_at,
+                   brief_approved_by, creation_request_id, created_at`,
         [
           request.params.projectId,
           request.workspaceSession.workspace_id,
@@ -519,7 +567,7 @@ export function createWorkspaceApp({ config, pool, jiraOAuthConfig = { configure
         [request.workspaceSession.workspace_id, request.workspaceSession.user_subject, request.params.projectId],
       );
       await client.query('COMMIT');
-      return response.json({ project: toProject(updated.rows[0]) });
+      return response.json({ project: toProject({ ...updated.rows[0], approver_display_name: request.workspaceSession.display_name }) });
     } catch {
       if (client) await client.query('ROLLBACK').catch(() => {});
       return response.status(503).json({ error: { code: 'WORKSPACE_UNAVAILABLE', message: 'The brief could not be saved. Try again after the workspace is available.' } });
@@ -534,8 +582,14 @@ export function createWorkspaceApp({ config, pool, jiraOAuthConfig = { configure
     }
     try {
       const result = await pool.query(
-        `SELECT id, name, client, problem, target_user, success_signal, brief_approved_at, created_at
-         FROM studio_client_projects WHERE id = $1 AND workspace_id = $2`,
+        `SELECT p.id, p.name, p.client, p.problem, p.target_user, p.success_signal,
+                p.brief_approved_at, p.creation_request_id, p.created_at,
+                approver.display_name AS approver_display_name
+         FROM studio_client_projects p
+         LEFT JOIN studio_workspace_members approver_member
+           ON approver_member.workspace_id = p.workspace_id AND approver_member.user_subject = p.brief_approved_by
+         LEFT JOIN studio_users approver ON approver.subject = approver_member.user_subject
+         WHERE p.id = $1 AND p.workspace_id = $2`,
         [request.params.projectId, request.workspaceSession.workspace_id],
       );
       if (!result.rows[0]) {

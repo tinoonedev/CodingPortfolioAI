@@ -18,6 +18,8 @@ if (!connectionString || (process.env.NODE_ENV === 'production' && process.env.D
     const sharedRateLimitsMigration = await readFile(new URL('./migrations/003_shared_auth_rate_limits.sql', import.meta.url), 'utf8');
     const projectRequirementRevisionsMigration = await readFile(new URL('./migrations/004_project_requirement_revisions.sql', import.meta.url), 'utf8');
     const jiraConnectionsMigration = await readFile(new URL('./migrations/005_jira_connections.sql', import.meta.url), 'utf8');
+    const jiraOAuthTransactionsMigration = await readFile(new URL('./migrations/006_jira_oauth_transactions.sql', import.meta.url), 'utf8');
+    const jiraOAuthTransactionLimitMigration = await readFile(new URL('./migrations/007_jira_oauth_transaction_session_limit.sql', import.meta.url), 'utf8');
     await pool.query(`CREATE TABLE IF NOT EXISTS fieldwork_schema_migrations (
       version INTEGER PRIMARY KEY,
       applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -99,7 +101,37 @@ if (!connectionString || (process.env.NODE_ENV === 'production' && process.env.D
       }
       console.log('Workspace database migration 5 applied.');
     }
-    if (versions.has(1) && versions.has(2) && versions.has(3) && versions.has(4) && versions.has(5)) {
+    if (!versions.has(6)) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(jiraOAuthTransactionsMigration);
+        await client.query('INSERT INTO fieldwork_schema_migrations (version) VALUES ($1)', [6]);
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
+      } finally {
+        client.release();
+      }
+      console.log('Workspace database migration 6 applied.');
+    }
+    if (!versions.has(7)) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(jiraOAuthTransactionLimitMigration);
+        await client.query('INSERT INTO fieldwork_schema_migrations (version) VALUES ($1)', [7]);
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
+      } finally {
+        client.release();
+      }
+      console.log('Workspace database migration 7 applied.');
+    }
+    if (versions.has(1) && versions.has(2) && versions.has(3) && versions.has(4) && versions.has(5) && versions.has(6) && versions.has(7)) {
       console.log('Workspace database schema is current.');
     }
   } catch {

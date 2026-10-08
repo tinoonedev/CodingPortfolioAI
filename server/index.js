@@ -2,9 +2,11 @@ import { Pool } from 'pg';
 import { createWorkspaceApp } from './app.js';
 import { readRuntimeConfig } from './config.js';
 import { purgeExpiredJiraOAuthData, readJiraOAuthConfig } from './jiraCredentials.js';
+import { readOpenAiRuntimeConfig } from './openaiCredentials.js';
 
 const config = readRuntimeConfig();
 const jiraOAuthConfig = readJiraOAuthConfig();
+const openAiConfig = readOpenAiRuntimeConfig();
 const pool = config.databaseUrl
   ? new Pool({
       connectionString: config.databaseUrl,
@@ -15,7 +17,7 @@ const pool = config.databaseUrl
     })
   : null;
 
-const app = createWorkspaceApp({ config, pool, jiraOAuthConfig });
+const app = createWorkspaceApp({ config, pool, jiraOAuthConfig, openAiConfig });
 if (pool) {
   const jiraOAuthCleanup = setInterval(() => {
     purgeExpiredJiraOAuthData(pool).catch(() => {});

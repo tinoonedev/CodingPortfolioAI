@@ -102,6 +102,8 @@ test('invited accounts persist workspace projects and cannot read another worksp
     const jiraPanel = page.getByRole('region', { name: 'Jira connection' });
     await expect(jiraPanel).toBeVisible();
     await expect(jiraPanel.getByRole('status')).toHaveText('Not connected');
+    const agentPanel = page.getByRole('region', { name: 'Project agent readiness' });
+    await expect(agentPanel.getByRole('status')).toHaveText('Setup required');
 
     const account = await pool.query('SELECT subject FROM studio_users WHERE lower(email) = $1', [email]);
     subject = account.rows[0]?.subject;
@@ -119,6 +121,69 @@ test('invited accounts persist workspace projects and cannot read another worksp
     expect(projectsBefore.ok()).toBeTruthy();
     const projectBefore = (await projectsBefore.json()).projects.find((project) => project.name === projectName);
     expect(projectBefore).toBeTruthy();
+    const agentReadiness = await page.context().request.get(`/api/projects/${projectBefore.id}/agents/openai/readiness`);
+    expect(agentReadiness.status()).toBe(200);
+    const agentReadinessBody = await agentReadiness.json();
+    expect(agentReadinessBody.status).toBe('not_configured');
+    expect(agentReadinessBody.canStartRun).toBe(false);
+    const openAiConfigurationIntegration = process.env.WORKSPACE_OPENAI_CONFIG_INTEGRATION === '1';
+    expect(agentReadinessBody.canConfigure).toBe(openAiConfigurationIntegration);
+    expect(agentReadinessBody.projectId).toBe(projectBefore.id);
+    expect(JSON.stringify(agentReadinessBody)).not.toMatch(/OPENAI_API_KEY|sk-[A-Za-z0-9_-]{12}|ciphertext|Bearer /i);
+    if (openAiConfigurationIntegration) {
+      await expect(agentPanel.getByRole('button', { name: 'Save encrypted project settings' })).toBeEnabled();
+      const apiKey = `sk-proj-${randomBytes(24).toString('hex')}`;
+      await agentPanel.getByLabel('OpenAI project API key').fill(apiKey);
+      await agentPanel.getByLabel('Allowed model').selectOption('integration-no-egress');
+      await agentPanel.getByRole('button', { name: 'Save encrypted project settings' }).click();
+      await expect(agentPanel.getByText(/Project credentials were encrypted and saved/)).toBeVisible();
+      await expect(agentPanel.getByLabel('OpenAI project API key')).toHaveValue('');
+      const configuredReadiness = await page.context().request.get(`/api/projects/${projectBefore.id}/agents/openai/readiness`);
+      expect(configuredReadiness.status()).toBe(200);
+      const configuredReadinessBody = await configuredReadiness.json();
+      expect(configuredReadinessBody.status).toBe('execution_unavailable');
+      expect(configuredReadinessBody.projectConfigured).toBe(true);
+      expect(configuredReadinessBody.projectConfigurationValid).toBe(true);
+      expect(configuredReadinessBody.canStartRun).toBe(false);
+      expect(JSON.stringify(configuredReadinessBody)).not.toContain(apiKey);
+      expect(JSON.stringify(configuredReadinessBody)).not.toMatch(/ciphertext|Bearer /i);
+      const encryptedConfiguration = await pool.query(
+        'SELECT encrypted_credentials, credential_key_id FROM studio_openai_project_configs WHERE workspace_id = $1 AND project_id = $2',
+        [workspaceId, projectBefore.id],
+      );
+      expect(encryptedConfiguration.rowCount).toBe(1);
+      expect(JSON.stringify(encryptedConfiguration.rows[0].encrypted_credentials)).not.toContain(apiKey);
+      const configurationAudit = await pool.query(
+        `SELECT metadata FROM studio_audit_events
+         WHERE workspace_id = $1 AND action = 'openai.project_configuration_saved' AND entity_id = $2
+         ORDER BY created_at DESC LIMIT 1`,
+        [workspaceId, projectBefore.id],
+      );
+      expect(configurationAudit.rowCount).toBe(1);
+      expect(configurationAudit.rows[0].metadata).toMatchObject({ credentialEncrypted: true, providerValidated: false, executionEnabled: false });
+      expect(JSON.stringify(configurationAudit.rows[0].metadata)).not.toContain(apiKey);
+      const pausedAgentRun = await page.context().request.post(`/api/projects/${projectBefore.id}/agents/runs`, {
+        data: { role: 'business-analyst', artifact: 'Feature: Project-scoped run readiness' },
+        headers: { origin: 'http://127.0.0.1:4173' },
+      });
+      expect(pausedAgentRun.status()).toBe(503);
+      expect((await pausedAgentRun.json()).error.code).toBe('OPENAI_EXECUTION_UNAVAILABLE');
+      const runCount = await pool.query('SELECT count(*) FROM studio_agent_runs WHERE workspace_id = $1 AND project_id = $2', [workspaceId, projectBefore.id]);
+      expect(runCount.rows[0].count).toBe('0');
+    } else {
+      await expect(agentPanel.getByRole('button', { name: 'Save encrypted project settings' })).toBeDisabled();
+      await expect(agentPanel.getByText('PROJECT_OPENAI_CONFIGURATION', { exact: true })).toBeVisible();
+      await expect(agentPanel.getByText('OPENAI_MODEL_PRICING_USD_PER_MILLION', { exact: true })).toBeVisible();
+      const blockedAgentRun = await page.context().request.post(`/api/projects/${projectBefore.id}/agents/runs`, {
+        data: { role: 'business-analyst', artifact: 'Feature: Project-scoped run readiness' },
+        headers: { origin: 'http://127.0.0.1:4173' },
+      });
+      expect(blockedAgentRun.status()).toBe(503);
+      const blockedAgentRunBody = await blockedAgentRun.json();
+      expect(blockedAgentRunBody.error.code).toBe('OPENAI_SETUP_REQUIRED');
+      expect(blockedAgentRunBody.error.missing).toContain('PROJECT_OPENAI_CONFIGURATION');
+      expect(JSON.stringify(blockedAgentRunBody)).not.toMatch(/OPENAI_API_KEY|ciphertext|Bearer |sk-[A-Za-z0-9]{12}/i);
+    }
     const jiraStatus = await page.context().request.get(`/api/projects/${projectBefore.id}/jira/connection`);
     expect(jiraStatus.ok()).toBeTruthy();
     const jiraStatusBody = await jiraStatus.json();
@@ -204,6 +269,12 @@ test('invited accounts persist workspace projects and cannot read another worksp
     const memberJiraAuthorization = await page.context().request.post(`/api/projects/${projectBefore.id}/jira/authorization`, { headers: { origin: 'http://127.0.0.1:4173' } });
     expect(memberJiraAuthorization.status()).toBe(403);
     expect((await memberJiraAuthorization.json()).error.code).toBe('OWNER_REQUIRED');
+    const memberOpenAiConfiguration = await page.context().request.put(`/api/projects/${projectBefore.id}/agents/openai/configuration`, {
+      data: {},
+      headers: { origin: 'http://127.0.0.1:4173' },
+    });
+    expect(memberOpenAiConfiguration.status()).toBe(403);
+    expect((await memberOpenAiConfiguration.json()).error.code).toBe('OWNER_REQUIRED');
     const memberAccount = await pool.query('SELECT subject FROM studio_users WHERE lower(email) = $1', [memberEmail]);
     memberSubject = memberAccount.rows[0]?.subject;
     expect(memberSubject?.startsWith(memberSubjectPrefix)).toBeTruthy();
@@ -236,6 +307,15 @@ test('invited accounts persist workspace projects and cannot read another worksp
     const foreignJiraStatus = await page.context().request.get(`/api/projects/${foreignProjectId}/jira/connection`);
     expect(foreignJiraStatus.status()).toBe(404);
     expect(await foreignJiraStatus.text()).not.toContain('Private Client');
+    const foreignAgentReadiness = await page.context().request.get(`/api/projects/${foreignProjectId}/agents/openai/readiness`);
+    expect(foreignAgentReadiness.status()).toBe(404);
+    expect(await foreignAgentReadiness.text()).not.toContain('Private Client');
+    const foreignAgentRun = await page.context().request.post(`/api/projects/${foreignProjectId}/agents/runs`, {
+      data: { role: 'business-analyst', artifact: 'Private client content' },
+      headers: { origin: 'http://127.0.0.1:4173' },
+    });
+    expect(foreignAgentRun.status()).toBe(404);
+    expect(await foreignAgentRun.text()).not.toContain('Private client content');
     const foreignPlanValidation = await page.context().request.post(`/api/projects/${foreignProjectId}/jira-work-plan/validate`, {
       data: { plan: {} },
       headers: { origin: 'http://127.0.0.1:4173' },
